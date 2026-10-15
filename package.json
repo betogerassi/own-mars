@@ -1,0 +1,28 @@
+{
+  "name": "own-mars",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 7777",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "rm -rf .test-build && ./node_modules/.bin/tsc app/lib/demo.ts --ignoreConfig --target ES2022 --module nodenext --moduleResolution nodenext --outDir .test-build --skipLibCheck && node --test tests/demo.test.mjs"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "lucide-react": "^0.552.0",
+    "next": "^16.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.181.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2"
+  }
+}
