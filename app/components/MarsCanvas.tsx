@@ -1,5 +1,140 @@
 "use client";
-import{Canvas,useFrame,useThree}from"@react-three/fiber";import{OrbitControls,Stars}from"@react-three/drei";import{useEffect,useMemo,useRef,useState}from"react";import*as THREE from"three";import type{Spot}from"../lib/demo";import{pointToLatLon}from"../lib/demo";
-export type MarsControls={zoomIn:()=>void;zoomOut:()=>void;reset:()=>void;orbit:()=>void;focus:(a:number,b:number)=>void};const R=1.5;const pos=(a:number,b:number,r=R)=>new THREE.Vector3(r*Math.cos(a*Math.PI/180)*Math.cos(b*Math.PI/180),r*Math.sin(a*Math.PI/180),r*Math.cos(a*Math.PI/180)*Math.sin(b*Math.PI/180));
-function Scene({selected,spots,onSelect,controlRef}:{selected:Spot|null;spots:Spot[];onSelect:(a:number,b:number)=>void;controlRef:React.MutableRefObject<MarsControls|null>}){const c=useRef<any>(null),g=useRef<THREE.Group>(null),fly=useRef<THREE.Vector3|null>(null);const{camera}=useThree();const[t,setT]=useState<THREE.Texture>();useEffect(()=>{new THREE.TextureLoader().load("https://assets.science.nasa.gov/content/dam/science/cds/3d/resources/image/mars/Mars.jpg",x=>{x.colorSpace=THREE.SRGBColorSpace;setT(x)})},[]);const cancel=()=>{fly.current=null};const zoom=(factor:number)=>{cancel();const target=c.current?.target||new THREE.Vector3();const v=camera.position.clone().sub(target);const d=THREE.MathUtils.clamp(v.length()*factor,1.78,6);camera.position.copy(target.clone().add(v.normalize().multiplyScalar(d)));c.current?.update()};const focus=(a:number,b:number)=>{fly.current=pos(a,b);};useEffect(()=>{controlRef.current={zoomIn:()=>zoom(.8),zoomOut:()=>zoom(1.25),reset:()=>{cancel();camera.position.set(0,0,4.5);c.current?.target.set(0,0,0);c.current?.update()},orbit:()=>{cancel();camera.position.set(0,0,4.5);c.current?.target.set(0,0,0);c.current?.update()},focus};return()=>{controlRef.current=null}},[camera]);useEffect(()=>{if(selected)focus(selected.lat,selected.lon)},[selected]);useFrame((_,dt)=>{if(g.current&&!fly.current)g.current.rotation.y+=dt*.025;if(fly.current&&c.current){const p=fly.current,want=p.clone().normalize().multiplyScalar(2.35);camera.position.lerp(want,.09);c.current.target.lerp(p.clone().multiplyScalar(.45),.1);c.current.update();if(camera.position.distanceTo(want)<.025)fly.current=null}});return <><color attach="background" args={["#0a0808"]}/><Stars radius={70} depth={30} count={900} factor={1.5}/><ambientLight intensity={.55}/><directionalLight position={[4,3,5]} intensity={2.4}/><group ref={g}><mesh onClick={e=>{const x=pointToLatLon(e.point);onSelect(x.lat,x.lon)}} onDoubleClick={e=>{const x=pointToLatLon(e.point);onSelect(x.lat,x.lon)}}><sphereGeometry args={[R,96,72]}/><meshStandardMaterial map={t} color={t?"#fff":"#b4472b"} roughness={.9}/></mesh>{spots.map(s=>{const p=pos(s.lat,s.lon,R+.02),q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),p.clone().normalize());return <group key={s.id} position={p} quaternion={q}><mesh><planeGeometry args={[.28,.28]}/><meshBasicMaterial color="#ff805b"/></mesh></group>})}</group><OrbitControls ref={c} enablePan={false} minDistance={1.78} maxDistance={6} enableDamping dampingFactor={.08} onStart={cancel}/></>};
-export default function MarsCanvas({selected,spots,onSelect,controlRef,className}:{selected:Spot|null;spots:Spot[];onSelect:(a:number,b:number)=>void;controlRef:React.MutableRefObject<MarsControls|null>;className?:string}){return <div className={"mars-canvas "+(className||"")}><Canvas camera={{position:[0,0,4.5],fov:38}} dpr={[1,1.5]} gl={{antialias:true}}><Scene selected={selected} spots={spots} onSelect={onSelect} controlRef={controlRef}/></Canvas></div>}
+
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls, Stars } from "@react-three/drei";
+import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import type { MutableRefObject } from "react";
+import type { Spot } from "../lib/demo";
+import { pointToLatLon } from "../lib/demo";
+
+export type MarsControls = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  reset: () => void;
+  orbit: () => void;
+  focus: (lat: number, lon: number) => void;
+};
+
+type Transition = { position: THREE.Vector3; target: THREE.Vector3 };
+
+const RADIUS = 1.5;
+const INITIAL_POSITION = new THREE.Vector3(0, 0, 5.25);
+const MIN_DISTANCE = 1.85;
+const MAX_DISTANCE = 6;
+
+function positionFor(lat: number, lon: number, radius = RADIUS) {
+  const latRadians = THREE.MathUtils.degToRad(lat);
+  const lonRadians = THREE.MathUtils.degToRad(lon);
+  return new THREE.Vector3(
+    radius * Math.cos(latRadians) * Math.cos(lonRadians),
+    radius * Math.sin(latRadians),
+    radius * Math.cos(latRadians) * Math.sin(lonRadians),
+  );
+}
+
+function Scene({
+  selected,
+  spots,
+  onSelect,
+  controlRef,
+  interactive,
+  focusOnSelection,
+}: {
+  selected: Spot | null;
+  spots: Spot[];
+  onSelect: (lat: number, lon: number) => void;
+  controlRef?: MutableRefObject<MarsControls | null>;
+  interactive: boolean;
+  focusOnSelection: boolean;
+}) {
+  const controls = useRef<any>(null);
+  const globe = useRef<THREE.Group>(null);
+  const transition = useRef<Transition | null>(null);
+  const isInteracting = useRef(false);
+  const { camera } = useThree();
+  const [texture, setTexture] = useState<THREE.Texture>();
+
+  useEffect(() => {
+    const loader = new THREE.TextureLoader();
+    loader.load("https://assets.science.nasa.gov/content/dam/science/cds/3d/resources/image/mars/Mars.jpg", (loaded) => {
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      setTexture(loaded);
+    });
+  }, []);
+
+  const cancelTransition = () => {
+    transition.current = null;
+  };
+
+  const startTransition = (position: THREE.Vector3, target: THREE.Vector3) => {
+    transition.current = { position, target };
+  };
+
+  const reset = () => {
+    startTransition(INITIAL_POSITION.clone(), new THREE.Vector3());
+  };
+
+  const zoom = (factor: number) => {
+    cancelTransition();
+    const target = controls.current?.target ?? new THREE.Vector3();
+    const offset = camera.position.clone().sub(target);
+    const nextDistance = THREE.MathUtils.clamp(offset.length() * factor, MIN_DISTANCE, MAX_DISTANCE);
+    if (offset.lengthSq() === 0) offset.set(0, 0, 1);
+    camera.position.copy(target.clone().add(offset.normalize().multiplyScalar(nextDistance)));
+    controls.current?.update();
+  };
+
+  const focus = (lat: number, lon: number) => {
+    const localPoint = positionFor(lat, lon);
+    // Coordinates are stored in Mars-local space. The surface can have rotated
+    // since the selection, so derive a world-space camera destination from the
+    // group's current transform rather than treating local values as world ones.
+    const worldPoint = globe.current?.localToWorld(localPoint.clone()) ?? localPoint;
+    startTransition(worldPoint.clone().normalize().multiplyScalar(2.55), worldPoint.clone().multiplyScalar(0.42));
+  };
+
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = { zoomIn: () => zoom(0.8), zoomOut: () => zoom(1.25), reset, orbit: reset, focus };
+    return () => {
+      if (controlRef.current) controlRef.current = null;
+    };
+  }, [camera, controlRef]);
+
+  useEffect(() => {
+    if (selected && focusOnSelection) focus(selected.lat, selected.lon);
+  }, [selected, focusOnSelection]);
+
+  const selectPoint = (point: THREE.Vector3) => {
+    if (!interactive || !globe.current) return;
+    // Raycast positions are world-space. Mars rotates as a group, so selection
+    // must be converted to the texture's local coordinate frame first.
+    const coordinate = pointToLatLon(globe.current.worldToLocal(point.clone()));
+    onSelect(coordinate.lat, coordinate.lon);
+  };
+
+  useFrame((_, delta) => {
+    if (globe.current && !transition.current && !isInteracting.current) globe.current.rotation.y += delta * 0.025;
+    const next = transition.current;
+    if (!next || !controls.current) return;
+
+    const alpha = 1 - Math.exp(-8 * delta);
+    camera.position.lerp(next.position, alpha);
+    controls.current.target.lerp(next.target, alpha);
+    controls.current.update();
+
+    if (camera.position.distanceTo(next.position) < 0.01 && controls.current.target.distanceTo(next.target) < 0.01) {
+      camera.position.copy(next.position);
+      controls.current.target.copy(next.target);
+      controls.current.update();
+      transition.current = null;
+    }
+  });
+
+  return <><color attach="background" args={["#0a0808"]}/><Stars radius={70} depth={30} count={900} factor={1.5}/><ambientLight intensity={0.55}/><directionalLight position={[4,3,5]} intensity={2.4}/><group ref={globe}><mesh onClick={(event)=>selectPoint(event.point)} onDoubleClick={(event)=>selectPoint(event.point)}><sphereGeometry args={[RADIUS,96,72]}/><meshStandardMaterial map={texture} color={texture?"#fff":"#b4472b"} roughness={0.9}/></mesh>{spots.map((spot)=>{const point=positionFor(spot.lat,spot.lon,RADIUS+.02);const rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),point.clone().normalize());return <group key={spot.id} position={point} quaternion={rotation}><mesh><planeGeometry args={[.28,.28]}/><meshBasicMaterial color="#ff805b"/></mesh></group>})}</group><OrbitControls ref={controls} enablePan={false} enableRotate={interactive} enableZoom={interactive} minDistance={MIN_DISTANCE} maxDistance={MAX_DISTANCE} enableDamping dampingFactor={0.08} onStart={()=>{isInteracting.current=true;cancelTransition()}} onEnd={()=>{isInteracting.current=false}}/></>;
+}
+
+export default function MarsCanvas({ selected, spots, onSelect, controlRef, className, interactive=true, focusOnSelection=true }: { selected: Spot | null; spots: Spot[]; onSelect: (lat:number,lon:number)=>void; controlRef?: MutableRefObject<MarsControls | null>; className?: string; interactive?: boolean; focusOnSelection?: boolean }) {
+  return <div className={`mars-canvas ${className ?? ""}`}><Canvas camera={{position:INITIAL_POSITION.toArray(),fov:35}} dpr={[1,1.5]} gl={{antialias:true}}><Scene selected={selected} spots={spots} onSelect={onSelect} controlRef={controlRef} interactive={interactive} focusOnSelection={focusOnSelection}/></Canvas></div>;
+}
