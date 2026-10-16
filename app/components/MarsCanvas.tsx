@@ -86,8 +86,12 @@ function Scene({
   };
 
   const focus = (lat: number, lon: number) => {
-    const point = positionFor(lat, lon);
-    startTransition(point.clone().normalize().multiplyScalar(2.55), point.clone().multiplyScalar(0.42));
+    const localPoint = positionFor(lat, lon);
+    // Coordinates are stored in Mars-local space. The surface can have rotated
+    // since the selection, so derive a world-space camera destination from the
+    // group's current transform rather than treating local values as world ones.
+    const worldPoint = globe.current?.localToWorld(localPoint.clone()) ?? localPoint;
+    startTransition(worldPoint.clone().normalize().multiplyScalar(2.55), worldPoint.clone().multiplyScalar(0.42));
   };
 
   useEffect(() => {
