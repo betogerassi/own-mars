@@ -75,7 +75,7 @@ function Scene({
 
   useEffect(() => {
     const loader = new THREE.TextureLoader();
-    loader.load("/mars-nasa.jpg", (loaded) => {
+    loader.load("/mars-user-panorama.png", (loaded) => {
       loaded.colorSpace = THREE.SRGBColorSpace;
       setTexture(loaded);
     });

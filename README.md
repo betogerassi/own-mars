@@ -33,7 +33,7 @@ The tracked `public/_headers` file remains useful for Cloudflare-compatible stat
 
 Use a Postgres database with a `display_rectangles` table holding `x, y, width, height, status`, not one record per pixel. Add an exclusion constraint / transactional overlap query for reservations and an expiration worker. Keep price calculation, availability, uploads, moderation state, and payment-webhook verification server-side. Stripe test mode is a candidate only after merchant eligibility and legal review.
 
-The bundled `public/mars-nasa.jpg` is NASA's Mars 3D image texture, derived from Viking imagery processed at USGS and credited by NASA to NASA/JPL-Caltech. It is served locally so the preview does not depend on a third-party texture request. Review NASA's media-use guidance before a commercial launch.
+The bundled `public/mars-user-panorama.png` is the panoramic Mars texture supplied by the project owner. It is served locally so the preview does not depend on a third-party texture request. Confirm the source image's commercial-use rights before a public launch.
 
 ## Cost
 
