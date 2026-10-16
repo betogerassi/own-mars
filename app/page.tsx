@@ -26,7 +26,7 @@ export default function Home() {
   const price = spot ? priceOf(spot) : 0;
   const upload = (file?: File) => {
     if (!file) return;
-    if (!/image\/jpeg|image\/png|image\/webp/.test(file.type) || file.size > 450000) return alert("Use JPG, PNG or WebP under 450 KB.");
+    if (!/image\/jpeg|image\/png|image\/webp/.test(file.type) || file.size > 2_000_000) return alert("Use JPG, PNG or WebP under 2 MB.");
     const reader = new FileReader();
     reader.onload = () => edit({ image: String(reader.result) });
     reader.readAsDataURL(file);
