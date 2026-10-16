@@ -10,7 +10,10 @@ export function pointToLatLon(point: { x: number; y: number; z: number }) {
   return { lat: Math.asin(point.y / radius) * 180 / Math.PI, lon: Math.atan2(point.z, point.x) * 180 / Math.PI };
 }
 export function encodeSpot(spot: Spot) {
-  return btoa(unescape(encodeURIComponent(JSON.stringify(spot)))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  // Uploaded artwork stays in browser-local demo state. Including a base64 file
+  // in a share URL creates unusable URLs and would expose the upload publicly.
+  const { image: _image, ...shareableSpot } = spot;
+  return btoa(unescape(encodeURIComponent(JSON.stringify(shareableSpot)))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 export function decodeSpot(encoded: string): Spot | null {
   try {

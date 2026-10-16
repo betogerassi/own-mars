@@ -26,14 +26,14 @@ The tracked `public/_headers` file remains useful for Cloudflare-compatible stat
 - Responsive English-only landing experience.
 - React Three Fiber Mars globe with rotation, drag rotation, scroll/pinch zoom, and surface selection.
 - 40,000 × 25,000 virtual inventory-canvas framing, with $1/virtual-pixel calculator and 10×10 minimum.
-- Safe client-side prototype image preview for JPG, PNG, and WebP under 8 MB.
+- Safe client-side prototype image preview for JPG, PNG, and WebP under 2 MB.
 - Clearly labelled simulated checkout; no payment, database, image persistence, or real inventory is active.
 
 ## Architecture path for Phase 2
 
 Use a Postgres database with a `display_rectangles` table holding `x, y, width, height, status`, not one record per pixel. Add an exclusion constraint / transactional overlap query for reservations and an expiration worker. Keep price calculation, availability, uploads, moderation state, and payment-webhook verification server-side. Stripe test mode is a candidate only after merchant eligibility and legal review.
 
-The current globe is procedural to ensure the prototype works fully offline. Before launch, replace it with an optimized, legally reusable Mars texture and visible source attribution (for example NASA imagery subject to its applicable media-use guidance).
+The bundled `public/mars-nasa.jpg` is NASA's Mars 3D image texture, derived from Viking imagery processed at USGS and credited by NASA to NASA/JPL-Caltech. It is served locally so the preview does not depend on a third-party texture request. Review NASA's media-use guidance before a commercial launch.
 
 ## Cost
 
