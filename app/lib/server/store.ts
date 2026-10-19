@@ -6,9 +6,27 @@ import { randomUUID } from "node:crypto";
 import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, safeWebsite, sanitizeText, type PurchaseDraft } from "../marketplace";
 
 const dataDirectory = join(process.cwd(), "data");
-mkdirSync(dataDirectory, { recursive: true });
-const database = new DatabaseSync(join(dataDirectory, "own-mars.sqlite"));
+let openedDatabase: DatabaseSync | undefined;
 
+function db() {
+  if (openedDatabase) return openedDatabase;
+  mkdirSync(dataDirectory, { recursive: true });
+  const opened = new DatabaseSync(join(dataDirectory, "own-mars.sqlite"));
+  opened.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
+  initialise(opened);
+  openedDatabase = opened;
+  return opened;
+}
+
+// Keeps call sites concise while delaying I/O until an API handler actually runs.
+const database = new Proxy({} as DatabaseSync, {
+  get(_target, property) {
+    const value = Reflect.get(db(), property);
+    return typeof value === "function" ? value.bind(db()) : value;
+  },
+});
+
+function initialise(database: DatabaseSync) {
 database.exec(`
   CREATE TABLE IF NOT EXISTS plots (
     id TEXT PRIMARY KEY,
@@ -16,13 +34,30 @@ database.exec(`
     lat REAL NOT NULL, lon REAL NOT NULL,
     name TEXT NOT NULL, message TEXT NOT NULL, website TEXT NOT NULL, image TEXT,
     price_usd INTEGER NOT NULL DEFAULT 0,
+    publication_state TEXT NOT NULL DEFAULT 'DRAFT',
+    title TEXT NOT NULL DEFAULT '', creator_name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+    published_at TEXT,
     status TEXT NOT NULL CHECK(status IN ('reserved', 'paid')),
     reservation_expires_at TEXT,
     created_at TEXT NOT NULL, paid_at TEXT
   );
   CREATE INDEX IF NOT EXISTS plots_rectangle ON plots(status, x, y, width, height);
+  CREATE TABLE IF NOT EXISTS plot_likes (
+    plot_id TEXT NOT NULL REFERENCES plots(id),
+    visitor_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(plot_id, visitor_id)
+  );
 `);
 try { database.exec("ALTER TABLE plots ADD COLUMN price_usd INTEGER NOT NULL DEFAULT 0"); } catch { /* existing database already migrated */ }
+for (const migration of [
+  "ALTER TABLE plots ADD COLUMN publication_state TEXT NOT NULL DEFAULT 'DRAFT'",
+  "ALTER TABLE plots ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE plots ADD COLUMN creator_name TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE plots ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE plots ADD COLUMN published_at TEXT",
+]) { try { database.exec(migration); } catch { /* existing database already migrated */ } }
+}
 
 export type StoredPlot = PurchaseDraft & {
   id: string;
@@ -31,6 +66,11 @@ export type StoredPlot = PurchaseDraft & {
   createdAt: string;
   paidAt: string | null;
   price: number;
+  publicationState: "DRAFT" | "PUBLISHED" | "HIDDEN_BY_MODERATION" | "REMOVED_BY_MODERATION";
+  likes: number;
+  title: string;
+  creatorName: string;
+  description: string;
 };
 
 export class PlotUnavailableError extends Error {}
@@ -44,6 +84,9 @@ function rowToPlot(row: Record<string, unknown>): StoredPlot {
     status: row.status as StoredPlot["status"], reservationExpiresAt: row.reservation_expires_at ? String(row.reservation_expires_at) : null,
     createdAt: String(row.created_at), paidAt: row.paid_at ? String(row.paid_at) : null,
     price: Number(row.price_usd),
+    publicationState: String(row.publication_state) as StoredPlot["publicationState"],
+    likes: Number(row.likes ?? 0),
+    title: String(row.title ?? ""), creatorName: String(row.creator_name ?? ""), description: String(row.description ?? ""),
   };
 }
 
@@ -96,12 +139,37 @@ export function confirmSandboxCheckout(id: string, now = new Date()) {
 }
 
 export function getPlot(id: string) {
-  const row = database.prepare("SELECT * FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = database.prepare("SELECT plots.*, (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id) AS likes FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   return row ? rowToPlot(row) : null;
 }
 
 export function publishedPlots() {
-  return (database.prepare("SELECT * FROM plots WHERE status = 'paid' ORDER BY paid_at DESC").all() as Record<string, unknown>[]).map(rowToPlot);
+  return (database.prepare("SELECT plots.*, (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id) AS likes FROM plots WHERE status = 'paid' AND publication_state = 'PUBLISHED' ORDER BY paid_at DESC").all() as Record<string, unknown>[]).map(rowToPlot);
+}
+
+/** A paid plot can transition from DRAFT to PUBLISHED exactly once. */
+export function publishPlot(id: string, input: Record<string, unknown>, now = new Date()) {
+  const title = sanitizeText(input.title, 100);
+  const creator = sanitizeText(input.creatorName, 80);
+  const description = sanitizeText(input.description, 800);
+  if (!title || !creator) throw new Error("A title and public creator name are required.");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database.prepare("SELECT status, publication_state, image FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row || row.status !== "paid") throw new Error("Paid plot not found.");
+    if (row.publication_state !== "DRAFT") throw new Error("This plot already has its permanent publication.");
+    if (!row.image) throw new Error("Upload artwork before publishing.");
+    database.prepare("UPDATE plots SET publication_state = 'PUBLISHED', title = ?, creator_name = ?, description = ?, published_at = ? WHERE id = ?").run(title, creator, description, now.toISOString(), id);
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); throw error; }
+  return getPlot(id)!;
+}
+
+export function likePublishedPlot(id: string, visitorId: string, now = new Date()) {
+  const plot = getPlot(id);
+  if (!plot || plot.publicationState !== "PUBLISHED") throw new Error("Published plot not found.");
+  const result = database.prepare("INSERT OR IGNORE INTO plot_likes (plot_id, visitor_id, created_at) VALUES (?, ?, ?)").run(id, visitorId, now.toISOString());
+  return { likes: getPlot(id)!.likes, added: result.changes === 1 };
 }
 
 export const marketplaceLimits = { width: CANVAS_WIDTH, height: CANVAS_HEIGHT };
