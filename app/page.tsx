@@ -26,7 +26,7 @@ export default function Home() {
   const price = spot ? priceOf(spot) : 0;
   const upload = (file?: File) => {
     if (!file) return;
-    if (!/image\/jpeg|image\/png|image\/webp/.test(file.type) || file.size > 450000) return alert("Use JPG, PNG or WebP under 450 KB.");
+    if (!/image\/jpeg|image\/png|image\/webp/.test(file.type) || file.size > 2_000_000) return alert("Use JPG, PNG or WebP under 2 MB.");
     const reader = new FileReader();
     reader.onload = () => edit({ image: String(reader.result) });
     reader.readAsDataURL(file);
@@ -50,3 +50,4 @@ export default function Home() {
     {modal && spot && <div className="modal"><div className="modal-card"><button className="close" aria-label="Close checkout" onClick={() => setModal(false)}><X/></button>{done ? <><h2>Welcome to <em>Mars.</em></h2><p>Your demo plot is published at {spot.lat.toFixed(2)}°, {spot.lon.toFixed(2)}°.</p><button className="primary" onClick={share}><Share2/> COPY SHARE LINK</button></> : <><p className="eyebrow"><span/> DEMO CHECKOUT</p><h2>Ready to make<br/>your <em>mark?</em></h2><p>{spot.width} × {spot.height} pixels · ${price.toLocaleString()} USD. No payment is collected.</p><button className="primary" onClick={publish}>CONFIRM DEMO PUBLISH <Check/></button></>}</div></div>}
   </main>;
 }
+
