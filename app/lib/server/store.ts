@@ -48,6 +48,14 @@ database.exec(`
     created_at TEXT NOT NULL,
     PRIMARY KEY(plot_id, visitor_id)
   );
+  CREATE TABLE IF NOT EXISTS content_reports (
+    id TEXT PRIMARY KEY, plot_id TEXT NOT NULL REFERENCES plots(id), reason TEXT NOT NULL,
+    details TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN', created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS moderation_actions (
+    id TEXT PRIMARY KEY, plot_id TEXT NOT NULL REFERENCES plots(id), action TEXT NOT NULL,
+    reason TEXT NOT NULL, administrator TEXT NOT NULL, created_at TEXT NOT NULL
+  );
 `);
 try { database.exec("ALTER TABLE plots ADD COLUMN price_usd INTEGER NOT NULL DEFAULT 0"); } catch { /* existing database already migrated */ }
 for (const migration of [
@@ -170,6 +178,30 @@ export function likePublishedPlot(id: string, visitorId: string, now = new Date(
   if (!plot || plot.publicationState !== "PUBLISHED") throw new Error("Published plot not found.");
   const result = database.prepare("INSERT OR IGNORE INTO plot_likes (plot_id, visitor_id, created_at) VALUES (?, ?, ?)").run(id, visitorId, now.toISOString());
   return { likes: getPlot(id)!.likes, added: result.changes === 1 };
+}
+
+export function reportPlot(id: string, input: Record<string, unknown>, now = new Date()) {
+  const plot = getPlot(id);
+  if (!plot || plot.publicationState !== "PUBLISHED") throw new Error("Published plot not found.");
+  const reason = sanitizeText(input.reason, 80);
+  if (!reason) throw new Error("A report reason is required.");
+  const report = { id: "rpt_" + randomUUID(), reason, details: sanitizeText(input.details, 1000) };
+  database.prepare("INSERT INTO content_reports (id, plot_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)").run(report.id, id, report.reason, report.details, now.toISOString());
+  return report;
+}
+
+export function moderatePlot(id: string, action: "HIDDEN_BY_MODERATION" | "REMOVED_BY_MODERATION", reason: string, administrator: string, now = new Date()) {
+  const plot = getPlot(id);
+  if (!plot || plot.publicationState !== "PUBLISHED") throw new Error("Published plot not found.");
+  const cleanReason = sanitizeText(reason, 500);
+  if (!cleanReason) throw new Error("A moderation reason is required.");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.prepare("UPDATE plots SET publication_state = ? WHERE id = ?").run(action, id);
+    database.prepare("INSERT INTO moderation_actions (id, plot_id, action, reason, administrator, created_at) VALUES (?, ?, ?, ?, ?, ?)").run("mod_" + randomUUID(), id, action, cleanReason, administrator, now.toISOString());
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); throw error; }
+  return getPlot(id)!;
 }
 
 export const marketplaceLimits = { width: CANVAS_WIDTH, height: CANVAS_HEIGHT };
