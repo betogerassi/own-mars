@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "rm -rf .test-build && ./node_modules/.bin/tsc app/lib/demo.ts --ignoreConfig --target ES2022 --module nodenext --moduleResolution nodenext --outDir .test-build --skipLibCheck && node --test tests/demo.test.mjs"
+    "test": "rm -rf .test-build && ./node_modules/.bin/tsc app/lib/demo.ts app/lib/marketplace.ts --ignoreConfig --target ES2022 --module nodenext --moduleResolution nodenext --outDir .test-build --skipLibCheck && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
