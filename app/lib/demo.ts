@@ -1,5 +1,5 @@
 export type PlotSize = { width: number; height: number };
-export type Spot = { id: string; lat: number; lon: number; width: number; height: number; name: string; message: string; url: string; image?: string; crop: number; x: number; y: number };
+export type Spot = { id: string; lat: number; lon: number; width: number; height: number; name: string; message: string; url: string; image?: string; crop: number; cropX?: number; cropY?: number; x: number; y: number };
 
 export function validPlot(width: number, height: number) {
   return Number.isInteger(width) && Number.isInteger(height) && width >= 10 && height >= 10 && width <= 100 && height <= 100;

@@ -33,6 +33,7 @@ database.exec(`
     x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
     lat REAL NOT NULL, lon REAL NOT NULL,
     name TEXT NOT NULL, message TEXT NOT NULL, website TEXT NOT NULL, image TEXT,
+    crop REAL NOT NULL DEFAULT 1, crop_x REAL NOT NULL DEFAULT 0, crop_y REAL NOT NULL DEFAULT 0,
     price_usd INTEGER NOT NULL DEFAULT 0,
     publication_state TEXT NOT NULL DEFAULT 'DRAFT',
     title TEXT NOT NULL DEFAULT '', creator_name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
@@ -64,6 +65,9 @@ for (const migration of [
   "ALTER TABLE plots ADD COLUMN creator_name TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE plots ADD COLUMN description TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE plots ADD COLUMN published_at TEXT",
+  "ALTER TABLE plots ADD COLUMN crop REAL NOT NULL DEFAULT 1",
+  "ALTER TABLE plots ADD COLUMN crop_x REAL NOT NULL DEFAULT 0",
+  "ALTER TABLE plots ADD COLUMN crop_y REAL NOT NULL DEFAULT 0",
 ]) { try { database.exec(migration); } catch { /* existing database already migrated */ } }
 }
 
@@ -89,6 +93,7 @@ function rowToPlot(row: Record<string, unknown>): StoredPlot {
     id: String(row.id), x: Number(row.x), y: Number(row.y), width: Number(row.width), height: Number(row.height),
     lat: Number(row.lat), lon: Number(row.lon), name: String(row.name), message: String(row.message),
     url: String(row.website), image: row.image ? String(row.image) : undefined,
+    crop: Number(row.crop ?? 1), cropX: Number(row.crop_x ?? 0), cropY: Number(row.crop_y ?? 0),
     status: row.status as StoredPlot["status"], reservationExpiresAt: row.reservation_expires_at ? String(row.reservation_expires_at) : null,
     createdAt: String(row.created_at), paidAt: row.paid_at ? String(row.paid_at) : null,
     price: Number(row.price_usd),
@@ -106,7 +111,10 @@ function normalizeDraft(input: Record<string, unknown>): PurchaseDraft {
   const rectangle = rectangleFor(lat, lon, width, height);
   const image = sanitizeText(input.image, 512);
   if (image && !image.startsWith("/uploads/")) throw new Error("Artwork must be a validated local upload.");
-  return { ...rectangle, lat, lon, name: sanitizeText(input.name, 80), message: sanitizeText(input.message, 280), url: safeWebsite(input.url), image: image || undefined };
+  const crop = Math.min(2.5, Math.max(1, Number(input.crop) || 1));
+  const cropX = Math.min(1, Math.max(-1, Number(input.cropX) || 0));
+  const cropY = Math.min(1, Math.max(-1, Number(input.cropY) || 0));
+  return { ...rectangle, lat, lon, name: sanitizeText(input.name, 80), message: sanitizeText(input.message, 280), url: safeWebsite(input.url), image: image || undefined, crop, cropX, cropY };
 }
 
 export function reservePlot(input: Record<string, unknown>, now = new Date()) {
@@ -121,8 +129,8 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
     const conflict = database.prepare(`SELECT id FROM plots WHERE status IN ('reserved', 'paid')
       AND NOT (x + width <= ? OR x >= ? OR y + height <= ? OR y >= ?) LIMIT 1`).get(draft.x, draft.x + draft.width, draft.y, draft.y + draft.height);
     if (conflict) throw new PlotUnavailableError("That plot is no longer available.");
-    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,price_usd,status,reservation_expires_at,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, draft.x, draft.y, draft.width, draft.height, draft.lat, draft.lon, draft.name, draft.message, draft.url, draft.image ?? null, price, "reserved", reservationExpiresAt, createdAt);
+    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, draft.x, draft.y, draft.width, draft.height, draft.lat, draft.lon, draft.name, draft.message, draft.url, draft.image ?? null, draft.crop, draft.cropX, draft.cropY, price, "reserved", reservationExpiresAt, createdAt);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
