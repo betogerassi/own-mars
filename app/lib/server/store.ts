@@ -266,10 +266,27 @@ export function moderatePlot(id: string, action: "HIDDEN_BY_MODERATION" | "REMOV
   database.exec("BEGIN IMMEDIATE");
   try {
     database.prepare("UPDATE plots SET publication_state = ? WHERE id = ?").run(action, id);
+    database.prepare("UPDATE content_reports SET status = 'RESOLVED' WHERE plot_id = ? AND status = 'OPEN'").run(id);
     database.prepare("INSERT INTO moderation_actions (id, plot_id, action, reason, administrator, created_at) VALUES (?, ?, ?, ?, ?, ?)").run("mod_" + randomUUID(), id, action, cleanReason, administrator, now.toISOString());
     database.exec("COMMIT");
   } catch (error) { database.exec("ROLLBACK"); throw error; }
   return getPlot(id)!;
+}
+
+export type ModerationReport = { id: string; plotId: string; plotTitle: string; plotState: StoredPlot["publicationState"]; reason: string; details: string; createdAt: string };
+export type ModerationAction = { id: string; plotId: string; action: string; reason: string; administrator: string; createdAt: string };
+
+export function openModerationReports(): ModerationReport[] {
+  return (database.prepare(`SELECT reports.id, reports.plot_id, plots.title, plots.publication_state, reports.reason, reports.details, reports.created_at
+    FROM content_reports reports JOIN plots ON plots.id = reports.plot_id WHERE reports.status = 'OPEN' ORDER BY reports.created_at ASC`).all() as Record<string, unknown>[]).map(row => ({
+    id: String(row.id), plotId: String(row.plot_id), plotTitle: String(row.title), plotState: String(row.publication_state) as ModerationReport["plotState"], reason: String(row.reason), details: String(row.details), createdAt: String(row.created_at),
+  }));
+}
+
+export function moderationHistory(limit = 30): ModerationAction[] {
+  return (database.prepare("SELECT id, plot_id, action, reason, administrator, created_at FROM moderation_actions ORDER BY created_at DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map(row => ({
+    id: String(row.id), plotId: String(row.plot_id), action: String(row.action), reason: String(row.reason), administrator: String(row.administrator), createdAt: String(row.created_at),
+  }));
 }
 
 export const marketplaceLimits = { width: CANVAS_WIDTH, height: CANVAS_HEIGHT };
