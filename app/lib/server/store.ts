@@ -324,6 +324,36 @@ export function confirmedNeighborhoods() {
     FROM neighborhoods WHERE status = 'confirmed' ORDER BY confirmed_at DESC`).all() as Record<string, unknown>[]).map(rowToNeighborhood);
 }
 
+export type PublicDiscovery = {
+  mostLiked: StoredPlot[];
+  trendingNow: StoredPlot[];
+  newest: StoredPlot[];
+  hottestNeighborhoods: Array<{ id: string; name: string; founderName: string; confirmedResidents: number; recentLikes: number }>;
+  rules: { trendingWindowDays: number; trendingOrder: string; hottestNeighborhoodOrder: string };
+};
+
+/** Every ranking is derived from stored, public activity; no synthetic engagement is added. */
+export function publicDiscovery(now = new Date()): PublicDiscovery {
+  const recentSince = new Date(now.getTime() - 7 * 24 * 60 * 60_000).toISOString();
+  const plotRows = (order: string) => (database.prepare(`SELECT plots.*, (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id) AS likes
+    FROM plots WHERE status = 'paid' AND publication_state = 'PUBLISHED' ${order} LIMIT 24`).all() as Record<string, unknown>[]).map(rowToPlot);
+  const mostLiked = plotRows("ORDER BY likes DESC, published_at ASC");
+  const newest = plotRows("ORDER BY published_at DESC");
+  const trendingNow = (database.prepare(`SELECT plots.*, (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id) AS likes,
+    (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id AND created_at >= ?) AS recent_likes
+    FROM plots WHERE status = 'paid' AND publication_state = 'PUBLISHED'
+    ORDER BY recent_likes DESC, likes DESC, published_at DESC LIMIT 24`).all(recentSince) as Record<string, unknown>[])
+    .filter(row => Number(row.recent_likes) > 0).map(rowToPlot);
+  const hottestNeighborhoods = (database.prepare(`SELECT neighborhoods.id, neighborhoods.name, neighborhoods.founder_name,
+    (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS confirmed_residents,
+    (SELECT COUNT(*) FROM plot_likes likes JOIN neighborhood_lots lots ON lots.plot_id = likes.plot_id
+      JOIN plots ON plots.id = lots.plot_id WHERE lots.neighborhood_id = neighborhoods.id
+      AND plots.status = 'paid' AND plots.publication_state = 'PUBLISHED' AND likes.created_at >= ?) AS recent_likes
+    FROM neighborhoods WHERE status = 'confirmed' ORDER BY recent_likes DESC, confirmed_residents DESC, confirmed_at DESC LIMIT 24`).all(recentSince) as Record<string, unknown>[])
+    .filter(row => Number(row.recent_likes) > 0).map(row => ({ id: String(row.id), name: String(row.name), founderName: String(row.founder_name), confirmedResidents: Number(row.confirmed_residents), recentLikes: Number(row.recent_likes) }));
+  return { mostLiked, trendingNow, newest, hottestNeighborhoods, rules: { trendingWindowDays: 7, trendingOrder: "Likes in the last 7 days, then all-time likes, then publication date.", hottestNeighborhoodOrder: "Likes in the last 7 days across confirmed published resident plots, then confirmed residents." } };
+}
+
 export function requirePlotOwner(id: string, suppliedToken: string | undefined) {
   const row = database.prepare("SELECT owner_token FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   const token = row?.owner_token;
