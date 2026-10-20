@@ -37,3 +37,5 @@ The SQLite database and local `public/uploads` storage are intentionally unsuita
 The repository contains an opt-in Stripe test-mode adapter only. It is disabled by default and the Checkout and webhook routes fail closed when configuration is absent. To test it after an owner has approved a hosted preview and supplied **test-only** credentials through that host's protected environment store, configure the names in `.env.example`, register the signed webhook endpoint `/api/payments/stripe/webhook`, and use Stripe's test cards. Never use `sk_live_` or live webhooks here.
 
 Keep every secret in the host's protected environment-variable store. Never commit credentials. No deployment, merge, paid service activation or live payments occur from this repository without owner approval.
+
+See [docs/production-launch-approvals.md](docs/production-launch-approvals.md) for the evidence-based hosting constraint, required approvals and exact pre-launch sequence.
