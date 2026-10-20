@@ -1,12 +1,13 @@
 import "server-only";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, safeWebsite, sanitizeText, type PlotRectangle, type PurchaseDraft } from "../marketplace";
 import { boundaryForFounder, defaultNeighborhoodConfiguration, normalizeNeighborhoodName, priceForNeighborhoodOccupancy, type NeighborhoodBoundary } from "../neighborhoods";
 
-const dataDirectory = join(process.cwd(), "data");
+// Tests and disposable local previews can isolate state without touching the default sandbox data.
+const dataDirectory = process.env.OWN_MARS_DATA_DIRECTORY ? resolve(process.env.OWN_MARS_DATA_DIRECTORY) : join(process.cwd(), "data");
 let openedDatabase: DatabaseSync | undefined;
 
 function db() {
@@ -255,6 +256,12 @@ export function getNeighborhood(id: string) {
   const row = database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
     FROM neighborhoods WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
   return row ? rowToNeighborhood(row) : null;
+}
+
+/** Public discovery only exposes confirmed neighborhoods and real confirmed occupancy. */
+export function confirmedNeighborhoods() {
+  return (database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
+    FROM neighborhoods WHERE status = 'confirmed' ORDER BY confirmed_at DESC`).all() as Record<string, unknown>[]).map(rowToNeighborhood);
 }
 
 export function requirePlotOwner(id: string, suppliedToken: string | undefined) {
