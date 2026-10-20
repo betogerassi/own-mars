@@ -1,11 +1,14 @@
-import { getPlot, recordStripeCheckoutSession } from "../../../../lib/server/store";
+import { getPlot, recordStripeCheckoutSession, requirePlotOwner } from "../../../../lib/server/store";
 import { publicOrigin, stripeTestClient } from "../../../../lib/server/stripe";
+import { plotOwnerCookie } from "../../../../lib/server/ownership";
+import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 
 export async function POST(_request: Request, context: RouteContext<"/api/plots/[id]/checkout">) {
   try {
     const { id } = await context.params;
+    requirePlotOwner(id, (await cookies()).get(plotOwnerCookie(id))?.value);
     const plot = getPlot(id);
     if (!plot || plot.status !== "reserved") throw new Error("Active plot reservation not found.");
     const stripe = stripeTestClient();

@@ -2,7 +2,7 @@ import "server-only";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, safeWebsite, sanitizeText, type PurchaseDraft } from "../marketplace";
 
 const dataDirectory = join(process.cwd(), "data");
@@ -42,6 +42,7 @@ database.exec(`
     reservation_expires_at TEXT,
     stripe_checkout_session_id TEXT UNIQUE,
     stripe_payment_intent_id TEXT,
+    owner_token TEXT,
     created_at TEXT NOT NULL, paid_at TEXT
   );
   CREATE INDEX IF NOT EXISTS plots_rectangle ON plots(status, x, y, width, height);
@@ -69,6 +70,7 @@ for (const migration of [
   "ALTER TABLE plots ADD COLUMN published_at TEXT",
   "ALTER TABLE plots ADD COLUMN stripe_checkout_session_id TEXT",
   "ALTER TABLE plots ADD COLUMN stripe_payment_intent_id TEXT",
+  "ALTER TABLE plots ADD COLUMN owner_token TEXT",
   "ALTER TABLE plots ADD COLUMN crop REAL NOT NULL DEFAULT 1",
   "ALTER TABLE plots ADD COLUMN crop_x REAL NOT NULL DEFAULT 0",
   "ALTER TABLE plots ADD COLUMN crop_y REAL NOT NULL DEFAULT 0",
@@ -92,6 +94,7 @@ export type StoredPlot = PurchaseDraft & {
 
 export class PlotUnavailableError extends Error {}
 export class ReservationExpiredError extends Error {}
+export class PlotOwnershipError extends Error {}
 
 function rowToPlot(row: Record<string, unknown>): StoredPlot {
   return {
@@ -127,6 +130,7 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
   const createdAt = now.toISOString();
   const reservationExpiresAt = new Date(now.getTime() + 15 * 60_000).toISOString();
   const id = `rsv_${randomUUID()}`;
+  const ownerToken = randomUUID();
   const price = priceForRectangle(draft).total;
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -134,14 +138,23 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
     const conflict = database.prepare(`SELECT id FROM plots WHERE status IN ('reserved', 'paid')
       AND NOT (x + width <= ? OR x >= ? OR y + height <= ? OR y >= ?) LIMIT 1`).get(draft.x, draft.x + draft.width, draft.y, draft.y + draft.height);
     if (conflict) throw new PlotUnavailableError("That plot is no longer available.");
-    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, draft.x, draft.y, draft.width, draft.height, draft.lat, draft.lon, draft.name, draft.message, draft.url, draft.image ?? null, draft.crop, draft.cropX, draft.cropY, price, "reserved", reservationExpiresAt, createdAt);
+    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,owner_token,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, draft.x, draft.y, draft.width, draft.height, draft.lat, draft.lon, draft.name, draft.message, draft.url, draft.image ?? null, draft.crop, draft.cropX, draft.cropY, price, "reserved", reservationExpiresAt, ownerToken, createdAt);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
   }
-  return getPlot(id)!;
+  return { plot: getPlot(id)!, ownerToken };
+}
+
+export function requirePlotOwner(id: string, suppliedToken: string | undefined) {
+  const row = database.prepare("SELECT owner_token FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const token = row?.owner_token;
+  if (typeof token !== "string" || !suppliedToken) throw new PlotOwnershipError("This browser does not own the active plot reservation.");
+  const expected = Buffer.from(token);
+  const supplied = Buffer.from(suppliedToken);
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) throw new PlotOwnershipError("This browser does not own the active plot reservation.");
 }
 
 export function confirmSandboxCheckout(id: string, now = new Date()) {
