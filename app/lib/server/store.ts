@@ -318,6 +318,19 @@ export function getNeighborhood(id: string) {
   return row ? rowToNeighborhood(row) : null;
 }
 
+/** Returns only lots that have no confirmed/reserved membership and no global plot overlap. */
+export function availableNeighborhoodLotIndexes(neighborhoodId: string) {
+  const neighborhood = getNeighborhood(neighborhoodId);
+  if (!neighborhood || neighborhood.status !== "confirmed") return [];
+  const taken = new Set((database.prepare("SELECT lot_index FROM neighborhood_lots WHERE neighborhood_id = ? UNION SELECT lot_index FROM neighborhood_lot_reservations WHERE neighborhood_id = ?").all(neighborhoodId, neighborhoodId) as Array<Record<string, unknown>>).map(row => Number(row.lot_index)));
+  const plots = database.prepare("SELECT x, y, width, height FROM plots WHERE status IN ('reserved', 'paid')").all() as Array<Record<string, unknown>>;
+  const config = { ...defaultNeighborhoodConfiguration, capacity: neighborhood.capacity, columns: neighborhood.boundary.columns };
+  return Array.from({ length: neighborhood.capacity }, (_, index) => index).filter(index => index > 0 && !taken.has(index)).filter(index => {
+    const lot = lotForIndex(neighborhood.boundary, index, config);
+    return !plots.some(plot => rectanglesOverlap(lot, { x: Number(plot.x), y: Number(plot.y), width: Number(plot.width), height: Number(plot.height) }));
+  });
+}
+
 /** Public discovery only exposes confirmed neighborhoods and real confirmed occupancy. */
 export function confirmedNeighborhoods() {
   return (database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
