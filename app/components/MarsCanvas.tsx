@@ -7,6 +7,7 @@ import * as THREE from "three";
 import type { MutableRefObject } from "react";
 import type { Spot } from "../lib/demo";
 import { pointToLatLon } from "../lib/demo";
+import { MARS_MAX_DISTANCE, MARS_MIN_DISTANCE, nextMarsCameraDistance } from "../lib/camera";
 
 export type MarsControls = {
   zoomIn: () => void;
@@ -20,8 +21,8 @@ type Transition = { position: THREE.Vector3; target: THREE.Vector3 };
 
 const RADIUS = 1.5;
 const INITIAL_POSITION = new THREE.Vector3(0, 0, 5.25);
-const MIN_DISTANCE = 1.85;
-const MAX_DISTANCE = 6;
+const MIN_DISTANCE = MARS_MIN_DISTANCE;
+const MAX_DISTANCE = MARS_MAX_DISTANCE;
 
 function positionFor(lat: number, lon: number, radius = RADIUS) {
   const latRadians = THREE.MathUtils.degToRad(lat);
@@ -31,6 +32,30 @@ function positionFor(lat: number, lon: number, radius = RADIUS) {
     radius * Math.sin(latRadians),
     radius * Math.cos(latRadians) * Math.sin(lonRadians),
   );
+}
+
+function ArtworkMarker({ spot }: { spot: Spot }) {
+  const [artwork, setArtwork] = useState<THREE.Texture>();
+  const point = positionFor(spot.lat, spot.lon, RADIUS + 0.025);
+  const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), point.clone().normalize());
+  const size = THREE.MathUtils.clamp(Math.max(spot.width, spot.height) / 180, 0.16, 0.52);
+
+  useEffect(() => {
+    if (!spot.image) { setArtwork(undefined); return; }
+    const loader = new THREE.TextureLoader();
+    loader.load(spot.image, (loaded) => {
+      loaded.colorSpace = THREE.SRGBColorSpace;
+      loaded.wrapS = THREE.ClampToEdgeWrapping;
+      loaded.wrapT = THREE.ClampToEdgeWrapping;
+      const crop = THREE.MathUtils.clamp(spot.crop || 1, 1, 2.5);
+      loaded.repeat.set(1 / crop, 1 / crop);
+      loaded.offset.set((1 - 1 / crop) * (0.5 + (spot.cropX ?? 0) * 0.25), (1 - 1 / crop) * (0.5 + (spot.cropY ?? 0) * 0.25));
+      loaded.needsUpdate = true;
+      setArtwork(loaded);
+    });
+  }, [spot.crop, spot.cropX, spot.cropY, spot.image]);
+
+  return <group position={point} quaternion={rotation}><mesh><planeGeometry args={[size, size]}/><meshBasicMaterial map={artwork} color={artwork ? "#fff" : "#ff805b"} transparent={Boolean(artwork)} side={THREE.DoubleSide}/></mesh></group>;
 }
 
 function Scene({
@@ -57,7 +82,7 @@ function Scene({
 
   useEffect(() => {
     const loader = new THREE.TextureLoader();
-    loader.load("https://assets.science.nasa.gov/content/dam/science/cds/3d/resources/image/mars/Mars.jpg", (loaded) => {
+    loader.load("/mars-nasa.jpg", (loaded) => {
       loaded.colorSpace = THREE.SRGBColorSpace;
       setTexture(loaded);
     });
@@ -79,7 +104,7 @@ function Scene({
     cancelTransition();
     const target = controls.current?.target ?? new THREE.Vector3();
     const offset = camera.position.clone().sub(target);
-    const nextDistance = THREE.MathUtils.clamp(offset.length() * factor, MIN_DISTANCE, MAX_DISTANCE);
+    const nextDistance = nextMarsCameraDistance(offset.length(), factor);
     if (offset.lengthSq() === 0) offset.set(0, 0, 1);
     camera.position.copy(target.clone().add(offset.normalize().multiplyScalar(nextDistance)));
     controls.current?.update();
@@ -115,7 +140,7 @@ function Scene({
   };
 
   useFrame((_, delta) => {
-    if (globe.current && !transition.current && !isInteracting.current) globe.current.rotation.y += delta * 0.025;
+    if (globe.current && !transition.current && !isInteracting.current) globe.current.rotation.y += delta * 0.09;
     const next = transition.current;
     if (!next || !controls.current) return;
 
@@ -132,7 +157,8 @@ function Scene({
     }
   });
 
-  return <><color attach="background" args={["#0a0808"]}/><Stars radius={70} depth={30} count={900} factor={1.5}/><ambientLight intensity={0.55}/><directionalLight position={[4,3,5]} intensity={2.4}/><group ref={globe}><mesh onClick={(event)=>selectPoint(event.point)} onDoubleClick={(event)=>selectPoint(event.point)}><sphereGeometry args={[RADIUS,96,72]}/><meshStandardMaterial map={texture} color={texture?"#fff":"#b4472b"} roughness={0.9}/></mesh>{spots.map((spot)=>{const point=positionFor(spot.lat,spot.lon,RADIUS+.02);const rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),point.clone().normalize());return <group key={spot.id} position={point} quaternion={rotation}><mesh><planeGeometry args={[.28,.28]}/><meshBasicMaterial color="#ff805b"/></mesh></group>})}</group><OrbitControls ref={controls} enablePan={false} enableRotate={interactive} enableZoom={interactive} minDistance={MIN_DISTANCE} maxDistance={MAX_DISTANCE} enableDamping dampingFactor={0.08} onStart={()=>{isInteracting.current=true;cancelTransition()}} onEnd={()=>{isInteracting.current=false}}/></>;
+  const displaySpots = selected ? [selected, ...spots.filter((spot) => spot.id !== selected.id)] : spots;
+  return <><color attach="background" args={["#0a0808"]}/><Stars radius={70} depth={30} count={900} factor={1.5}/><ambientLight intensity={0.55}/><directionalLight position={[4,3,5]} intensity={2.4}/><group ref={globe}><mesh onClick={(event)=>selectPoint(event.point)} onDoubleClick={(event)=>selectPoint(event.point)}><sphereGeometry args={[RADIUS,96,72]}/>{texture ? <meshBasicMaterial map={texture}/> : <meshStandardMaterial color="#b4472b" roughness={0.9}/>}</mesh>{displaySpots.map((spot) => <ArtworkMarker key={spot.id} spot={spot}/>)}</group><OrbitControls ref={controls} enablePan={false} enableRotate={interactive} enableZoom={interactive} minDistance={MIN_DISTANCE} maxDistance={MAX_DISTANCE} enableDamping dampingFactor={0.08} onStart={()=>{isInteracting.current=true;cancelTransition()}} onEnd={()=>{isInteracting.current=false}}/></>;
 }
 
 export default function MarsCanvas({ selected, spots, onSelect, controlRef, className, interactive=true, focusOnSelection=true }: { selected: Spot | null; spots: Spot[]; onSelect: (lat:number,lon:number)=>void; controlRef?: MutableRefObject<MarsControls | null>; className?: string; interactive?: boolean; focusOnSelection?: boolean }) {

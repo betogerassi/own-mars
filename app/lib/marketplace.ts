@@ -21,6 +21,9 @@ export type PurchaseDraft = PlotRectangle & {
   message: string;
   url: string;
   image?: string;
+  crop: number;
+  cropX: number;
+  cropY: number;
 };
 
 export function isValidPlotSize(width: number, height: number) {

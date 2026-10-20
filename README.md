@@ -1,6 +1,6 @@
-# OWN MARS — Phase 1
+# OWN MARS — sandbox marketplace
 
-Interactive visual prototype for a virtual-display-space marketplace. It is not a land sale, property registry, payment system, or production-ready commerce service.
+OWN MARS is a virtual-display-space marketplace. It is not physical Mars land, a property registry, or a live commerce service.
 
 ## Run locally
 
@@ -9,32 +9,27 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:7777`. For a production verification build, run `npm run build`; the deployable static site is then written to `out/`.
+Open `http://localhost:7777`. Verify a production build with `npm run build`.
 
-## GitHub Pages deployment
+## Current sandbox capabilities
 
-This project is deliberately a static export and requires no runtime secrets, database, payment provider, or local server. The included GitHub Actions workflow builds and deploys `out/` whenever `main` changes.
+- Responsive Mars explorer with rotation, scroll/pinch zoom, reset controls, geographic selection and a 40,000 × 25,000 virtual canvas.
+- Zone-aware server quote: General Mars ($1), Prime ($3), Iconic ($10), and Landmark ($25) per virtual pixel.
+- A local SQLite sandbox adapter providing transactional reservations, overlap prevention, sandbox checkout, immutable publication, public plot pages, likes, reports and audited moderation states.
+- Server-validated JPG, PNG and WebP uploads up to 2 MB in local development, image crop/position preview, and browser-generated Story and Feed sharing cards.
+- No payment method, charge, production credential, paid service or live payment provider is active.
 
-- In GitHub: Settings → Pages → Source → GitHub Actions.
-- Add `ownmars.space` as the custom domain, then enable **Enforce HTTPS** when GitHub makes it available.
-- In GoDaddy, add the GitHub Pages A records for the apex and a `www` CNAME to `<your-github-user-or-org>.github.io`.
+## Texture
 
-The tracked `public/_headers` file remains useful for Cloudflare-compatible static hosts. Do not add `.env` values: there are none for the demo.
+The globe uses a temporary local NASA texture. It is not claimed as original OWN MARS artwork. See [public/ATTRIBUTION.md](public/ATTRIBUTION.md). Before launch, replace it with an original or separately licensed 8192 × 4096 2:1 texture, optimized as WebP. Do not upscale the temporary texture and present it as production quality.
 
-## Included
+## Production requirements — not yet implemented
 
-- Responsive English-only landing experience.
-- React Three Fiber Mars globe with rotation, drag rotation, scroll/pinch zoom, and surface selection.
-- 40,000 × 25,000 virtual inventory-canvas framing, with $1/virtual-pixel calculator and 10×10 minimum.
-- Safe client-side prototype image preview for JPG, PNG, and WebP under 8 MB.
-- Clearly labelled simulated checkout; no payment, database, image persistence, or real inventory is active.
+The SQLite database and local `public/uploads` storage are intentionally unsuitable for a public deployment. Before launch, approve and configure:
 
-## Architecture path for Phase 2
+1. A server-capable host, managed Postgres database and private object storage.
+2. Authenticated user accounts, secure signed uploads, malware/content moderation, rate limits, backups and monitoring.
+3. Durable rectangle reservation/fulfillment, deployed worker for expiry, and administrator console.
+4. A verified payment provider in sandbox/test mode first; live credentials and payments require explicit owner approval.
 
-Use a Postgres database with a `display_rectangles` table holding `x, y, width, height, status`, not one record per pixel. Add an exclusion constraint / transactional overlap query for reservations and an expiration worker. Keep price calculation, availability, uploads, moderation state, and payment-webhook verification server-side. Stripe test mode is a candidate only after merchant eligibility and legal review.
-
-The current globe is procedural to ensure the prototype works fully offline. Before launch, replace it with an optimized, legally reusable Mars texture and visible source attribution (for example NASA imagery subject to its applicable media-use guidance).
-
-## Cost
-
-Phase 1 requires no paid service. A domain is the only assumed cost. A managed database, object storage, email, monitoring, and payment processing may incur fees at scale; no paid service should be enabled without explicit approval.
+Keep every secret in the host's protected environment-variable store. Never commit credentials. No deployment, merge, paid service activation or live payments occur from this repository without owner approval.
