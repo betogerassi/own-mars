@@ -54,7 +54,7 @@ database.exec(`
   );
   CREATE TABLE IF NOT EXISTS content_reports (
     id TEXT PRIMARY KEY, plot_id TEXT NOT NULL REFERENCES plots(id), reason TEXT NOT NULL,
-    details TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN', created_at TEXT NOT NULL
+    details TEXT NOT NULL, reporter_id TEXT, status TEXT NOT NULL DEFAULT 'OPEN', created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS moderation_actions (
     id TEXT PRIMARY KEY, plot_id TEXT NOT NULL REFERENCES plots(id), action TEXT NOT NULL,
@@ -74,8 +74,10 @@ for (const migration of [
   "ALTER TABLE plots ADD COLUMN crop REAL NOT NULL DEFAULT 1",
   "ALTER TABLE plots ADD COLUMN crop_x REAL NOT NULL DEFAULT 0",
   "ALTER TABLE plots ADD COLUMN crop_y REAL NOT NULL DEFAULT 0",
+  "ALTER TABLE content_reports ADD COLUMN reporter_id TEXT",
 ]) { try { database.exec(migration); } catch { /* existing database already migrated */ } }
 database.exec("CREATE UNIQUE INDEX IF NOT EXISTS plots_stripe_checkout_session_id ON plots(stripe_checkout_session_id) WHERE stripe_checkout_session_id IS NOT NULL");
+database.exec("CREATE UNIQUE INDEX IF NOT EXISTS reports_per_visitor ON content_reports(plot_id, reporter_id) WHERE reporter_id IS NOT NULL");
 }
 
 export type StoredPlot = PurchaseDraft & {
@@ -235,14 +237,19 @@ export function likePublishedPlot(id: string, visitorId: string, now = new Date(
   return { likes: getPlot(id)!.likes, added: result.changes === 1 };
 }
 
-export function reportPlot(id: string, input: Record<string, unknown>, now = new Date()) {
+export function reportPlot(id: string, input: Record<string, unknown>, reporterId: string, now: Date = new Date()) {
   const plot = getPlot(id);
   if (!plot || plot.publicationState !== "PUBLISHED") throw new Error("Published plot not found.");
   const reason = sanitizeText(input.reason, 80);
   if (!reason) throw new Error("A report reason is required.");
   const report = { id: "rpt_" + randomUUID(), reason, details: sanitizeText(input.details, 1000) };
-  database.prepare("INSERT INTO content_reports (id, plot_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?)").run(report.id, id, report.reason, report.details, now.toISOString());
-  return report;
+  try {
+    database.prepare("INSERT INTO content_reports (id, plot_id, reason, details, reporter_id, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(report.id, id, report.reason, report.details, reporterId, now.toISOString());
+    return { ...report, submitted: true };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) return { ...report, submitted: false };
+    throw error;
+  }
 }
 
 export function moderatePlot(id: string, action: "HIDDEN_BY_MODERATION" | "REMOVED_BY_MODERATION", reason: string, administrator: string, now = new Date()) {
