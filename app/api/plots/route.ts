@@ -1,4 +1,6 @@
 import { publishedPlots, reservePlot, PlotUnavailableError } from "../../lib/server/store";
+import { plotOwnerCookie, plotOwnerCookieOptions } from "../../lib/server/ownership";
+import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 
@@ -8,8 +10,10 @@ export function GET() {
 
 export async function POST(request: Request) {
   try {
-    const plot = reservePlot(await request.json());
-    return Response.json({ reservation: plot }, { status: 201 });
+    const reservation = reservePlot(await request.json());
+    const response = Response.json({ reservation: reservation.plot }, { status: 201 });
+    (await cookies()).set(plotOwnerCookie(reservation.plot.id), reservation.ownerToken, plotOwnerCookieOptions);
+    return response;
   } catch (error) {
     const status = error instanceof PlotUnavailableError ? 409 : 400;
     return Response.json({ error: error instanceof Error ? error.message : "Could not reserve plot." }, { status });
