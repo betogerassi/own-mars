@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, safeWebsite, sanitizeText, type PlotRectangle, type PurchaseDraft } from "../marketplace";
-import { boundaryForFounder, defaultNeighborhoodConfiguration, normalizeNeighborhoodName, priceForNeighborhoodOccupancy, type NeighborhoodBoundary } from "../neighborhoods";
+import { boundaryForFounder, defaultNeighborhoodConfiguration, lotForIndex, normalizeNeighborhoodName, priceForNeighborhoodOccupancy, type NeighborhoodBoundary } from "../neighborhoods";
 
 // Tests and disposable local previews can isolate state without touching the default sandbox data.
 const dataDirectory = process.env.OWN_MARS_DATA_DIRECTORY ? resolve(process.env.OWN_MARS_DATA_DIRECTORY) : join(process.cwd(), "data");
@@ -78,6 +78,12 @@ database.exec(`
     lot_index INTEGER NOT NULL, plot_id TEXT NOT NULL UNIQUE REFERENCES plots(id),
     status TEXT NOT NULL CHECK(status IN ('confirmed')),
     created_at TEXT NOT NULL,
+    PRIMARY KEY(neighborhood_id, lot_index)
+  );
+  CREATE TABLE IF NOT EXISTS neighborhood_lot_reservations (
+    neighborhood_id TEXT NOT NULL REFERENCES neighborhoods(id),
+    lot_index INTEGER NOT NULL, plot_id TEXT NOT NULL UNIQUE REFERENCES plots(id),
+    expires_at TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY(neighborhood_id, lot_index)
   );
 `);
@@ -214,6 +220,14 @@ function removeExpiredNeighborhoodReservations(timestamp: string) {
   }
 }
 
+function removeExpiredLotReservations(timestamp: string) {
+  const expired = database.prepare("SELECT neighborhood_id, lot_index, plot_id FROM neighborhood_lot_reservations WHERE expires_at <= ?").all(timestamp) as Array<Record<string, unknown>>;
+  for (const reservation of expired) {
+    database.prepare("DELETE FROM neighborhood_lot_reservations WHERE neighborhood_id = ? AND lot_index = ?").run(String(reservation.neighborhood_id), Number(reservation.lot_index));
+    database.prepare("DELETE FROM plots WHERE id = ? AND status = 'reserved'").run(String(reservation.plot_id));
+  }
+}
+
 /** Reserves a unique neighborhood/name/founder plot, but grants no founder privilege until checkout confirms. */
 export function reserveNeighborhoodFounder(input: Record<string, unknown>, now = new Date()) {
   const lat = Number(input.lat);
@@ -256,6 +270,48 @@ function confirmFounderNeighborhoodForPlot(plotId: string, timestamp: string) {
   database.prepare("INSERT INTO neighborhood_lots (neighborhood_id, lot_index, plot_id, status, created_at) VALUES (?, 0, ?, 'confirmed', ?)").run(neighborhoodId, plotId, timestamp);
 }
 
+/** A nearby resident joins only after the underlying checkout reaches paid status. */
+function confirmNeighborhoodLotForPlot(plotId: string, timestamp: string) {
+  const reservation = database.prepare("SELECT neighborhood_id, lot_index, expires_at FROM neighborhood_lot_reservations WHERE plot_id = ?").get(plotId) as Record<string, unknown> | undefined;
+  if (!reservation) return;
+  if (String(reservation.expires_at) <= timestamp) throw new ReservationExpiredError("The neighborhood lot reservation expired before payment completed.");
+  const neighborhoodId = String(reservation.neighborhood_id);
+  const lotIndex = Number(reservation.lot_index);
+  database.prepare("DELETE FROM neighborhood_lot_reservations WHERE plot_id = ?").run(plotId);
+  database.prepare("INSERT INTO neighborhood_lots (neighborhood_id, lot_index, plot_id, status, created_at) VALUES (?, ?, ?, 'confirmed', ?)").run(neighborhoodId, lotIndex, plotId, timestamp);
+}
+
+export function reserveNeighborhoodLot(neighborhoodId: string, lotIndex: number, now = new Date()) {
+  const createdAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 15 * 60_000).toISOString();
+  const plotId = `rsv_${randomUUID()}`;
+  const ownerToken = randomUUID();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.prepare("DELETE FROM plots WHERE status = 'reserved' AND reservation_expires_at <= ?").run(createdAt);
+    removeExpiredNeighborhoodReservations(createdAt);
+    removeExpiredLotReservations(createdAt);
+    const row = database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
+      FROM neighborhoods WHERE id = ? AND status = 'confirmed'`).get(neighborhoodId) as Record<string, unknown> | undefined;
+    if (!row) throw new NeighborhoodUnavailableError("Confirmed neighborhood not found.");
+    const neighborhood = rowToNeighborhood(row);
+    if (!Number.isInteger(lotIndex) || lotIndex < 1 || lotIndex >= neighborhood.capacity || neighborhood.price.soldOut) throw new NeighborhoodUnavailableError("That neighborhood lot is unavailable.");
+    const rectangle = lotForIndex(neighborhood.boundary, lotIndex, { ...defaultNeighborhoodConfiguration, capacity: neighborhood.capacity, columns: neighborhood.boundary.columns });
+    const taken = database.prepare("SELECT 1 FROM neighborhood_lots WHERE neighborhood_id = ? AND lot_index = ? UNION ALL SELECT 1 FROM neighborhood_lot_reservations WHERE neighborhood_id = ? AND lot_index = ? LIMIT 1").get(neighborhoodId, lotIndex, neighborhoodId, lotIndex);
+    if (taken) throw new NeighborhoodUnavailableError("That neighborhood lot is no longer available.");
+    const plotConflict = (database.prepare("SELECT x, y, width, height FROM plots WHERE status IN ('reserved', 'paid')").all() as Array<Record<string, unknown>>)
+      .some((plot) => rectanglesOverlap(rectangle, { x: Number(plot.x), y: Number(plot.y), width: Number(plot.width), height: Number(plot.height) }));
+    if (plotConflict) throw new NeighborhoodUnavailableError("That neighborhood lot overlaps an existing Mars plot.");
+    const lat = 90 - ((rectangle.y + rectangle.height / 2) / CANVAS_HEIGHT) * 180;
+    const lon = ((rectangle.x + rectangle.width / 2) / CANVAS_WIDTH) * 360 - 180;
+    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,owner_token,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(plotId, rectangle.x, rectangle.y, rectangle.width, rectangle.height, lat, lon, "Neighborhood plot", "", "", null, 1, 0, 0, neighborhood.price.price!, "reserved", expiresAt, ownerToken, createdAt);
+    database.prepare("INSERT INTO neighborhood_lot_reservations (neighborhood_id, lot_index, plot_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)").run(neighborhoodId, lotIndex, plotId, expiresAt, createdAt);
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); throw error; }
+  return { neighborhood: getNeighborhood(neighborhoodId)!, plot: getPlot(plotId)!, ownerToken };
+}
+
 export function getNeighborhood(id: string) {
   const row = database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
     FROM neighborhoods WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
@@ -285,6 +341,7 @@ export function confirmSandboxCheckout(id: string, now = new Date()) {
     if (!row || row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("Your reservation has expired. Please select the plot again.");
     database.prepare("UPDATE plots SET status = 'paid', paid_at = ?, reservation_expires_at = NULL WHERE id = ?").run(timestamp, id);
     confirmFounderNeighborhoodForPlot(id, timestamp);
+    confirmNeighborhoodLotForPlot(id, timestamp);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -318,6 +375,7 @@ export function fulfillStripeCheckout(id: string, sessionId: string, paymentInte
     if (row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("The reservation expired before payment completed.");
     database.prepare("UPDATE plots SET status = 'paid', paid_at = ?, reservation_expires_at = NULL, stripe_payment_intent_id = ? WHERE id = ?").run(timestamp, paymentIntentId, id);
     confirmFounderNeighborhoodForPlot(id, timestamp);
+    confirmNeighborhoodLotForPlot(id, timestamp);
     database.exec("COMMIT");
   } catch (error) { database.exec("ROLLBACK"); throw error; }
   return getPlot(id)!;
