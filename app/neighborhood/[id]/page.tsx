@@ -20,7 +20,7 @@ export default async function NeighborhoodPage({ params }: PageProps<"/neighborh
       <p>{price.soldOut ? "SOLD OUT" : `${price.remaining} available · current new-plot price $${price.price}`}</p>
       {price.plotsUntilNextThreshold !== null && <p>Only {price.plotsUntilNextThreshold} {price.plotsUntilNextThreshold === 1 ? "plot" : "plots"} left before the next price tier.</p>}
       <p>Boundary: {neighborhood.boundary.width} × {neighborhood.boundary.height} virtual pixels · grid {neighborhood.boundary.originX}, {neighborhood.boundary.originY}</p>
-      <div className="modal-actions"><a className="primary" href={`/?neighborhood=${encodeURIComponent(neighborhood.id)}#explore`}>EXPLORE AVAILABLE PLOTS</a><a className="secondary" href={`/api/neighborhoods/${encodeURIComponent(neighborhood.id)}`}>VIEW PUBLIC DATA</a></div>
+      <div className="modal-actions"><a className="primary" href={`/neighborhood/${encodeURIComponent(neighborhood.id)}/join`}>JOIN THIS NEIGHBORHOOD</a><a className="secondary" href={`/api/neighborhoods/${encodeURIComponent(neighborhood.id)}`}>VIEW PUBLIC DATA</a></div>
     </article>
     <SiteFooter/>
   </main>;
