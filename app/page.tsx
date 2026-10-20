@@ -47,32 +47,13 @@ export default function Home() {
     return () => controller.abort();
   }, [spot?.lat, spot?.lon, spot?.width, spot?.height]);
 
-  // Kept separate from the standard purchase dialog while the founder flow is
-  // introduced incrementally. The server remains the authority for reservation
-  // and payment confirmation; browser prompts collect only public aliases.
+  // Founder data is collected in its own accessible flow; no browser prompts
+  // are used and the server remains authoritative for confirmation.
   useEffect(() => {
     if (stage !== "found-name" || !spot) return;
     setStage(null);
-    const requestedNeighborhoodName = window.prompt("Name your neighborhood (3–40 characters):", neighborhoodName)?.trim();
-    const requestedFounderName = requestedNeighborhoodName ? window.prompt("Your public founder name or alias:", founderName)?.trim() : "";
-    if (!requestedNeighborhoodName || !requestedFounderName) return;
-    setNeighborhoodName(requestedNeighborhoodName); setFounderName(requestedFounderName);
-    void (async () => {
-      setBusy(true); setError("");
-      try {
-        const reserveResponse = await fetch("/api/neighborhoods", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lat: spot.lat, lon: spot.lon, neighborhoodName: requestedNeighborhoodName, founderName: requestedFounderName }) });
-        const reservation = await reserveResponse.json() as { neighborhood?: { id: string }; founderPlot?: Spot; error?: string };
-        if (!reserveResponse.ok || !reservation.neighborhood || !reservation.founderPlot) throw new Error(reservation.error ?? "This neighborhood location is unavailable.");
-        setNeighborhoodId(reservation.neighborhood.id); setId(reservation.founderPlot.id);
-        if (!window.confirm(`Reserve ${requestedNeighborhoodName} for $100 in sandbox mode? No charge will be made.`)) return;
-        const confirmResponse = await fetch(`/api/plots/${encodeURIComponent(reservation.founderPlot.id)}/confirm`, { method: "POST" });
-        const confirmation = await confirmResponse.json() as { error?: string };
-        if (!confirmResponse.ok) throw new Error(confirmation.error ?? "Sandbox checkout failed.");
-        window.location.assign(`/neighborhood/${encodeURIComponent(reservation.neighborhood.id)}`);
-      } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not found this neighborhood."); }
-      finally { setBusy(false); }
-    })();
-  }, [stage, spot, neighborhoodName, founderName]);
+    window.location.assign(`/found?lat=${encodeURIComponent(spot.lat)}&lon=${encodeURIComponent(spot.lon)}`);
+  }, [stage, spot]);
 
   const select = (lat: number, lon: number) => { setError(""); setSpot(current => current ? { ...current, id: `draft-${Date.now()}`, lat, lon } : fresh(lat, lon)); };
   const edit = (change: Partial<Spot>) => { setError(""); setSpot(current => current && ({ ...current, ...change })); };
