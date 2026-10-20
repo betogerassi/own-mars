@@ -3,7 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, safeWebsite, sanitizeText, type PurchaseDraft } from "../marketplace";
+import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, safeWebsite, sanitizeText, type PlotRectangle, type PurchaseDraft } from "../marketplace";
+import { boundaryForFounder, defaultNeighborhoodConfiguration, normalizeNeighborhoodName, priceForNeighborhoodOccupancy, type NeighborhoodBoundary } from "../neighborhoods";
 
 const dataDirectory = join(process.cwd(), "data");
 let openedDatabase: DatabaseSync | undefined;
@@ -12,7 +13,7 @@ function db() {
   if (openedDatabase) return openedDatabase;
   mkdirSync(dataDirectory, { recursive: true });
   const opened = new DatabaseSync(join(dataDirectory, "own-mars.sqlite"));
-  opened.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
+  opened.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
   initialise(opened);
   openedDatabase = opened;
   return opened;
@@ -60,6 +61,24 @@ database.exec(`
     id TEXT PRIMARY KEY, plot_id TEXT NOT NULL REFERENCES plots(id), action TEXT NOT NULL,
     reason TEXT NOT NULL, administrator TEXT NOT NULL, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS neighborhoods (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE,
+    origin_x INTEGER NOT NULL, origin_y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+    columns_count INTEGER NOT NULL, rows_count INTEGER NOT NULL, capacity INTEGER NOT NULL,
+    lot_width INTEGER NOT NULL, lot_height INTEGER NOT NULL, founder_price_usd INTEGER NOT NULL,
+    founder_plot_id TEXT NOT NULL UNIQUE REFERENCES plots(id),
+    status TEXT NOT NULL CHECK(status IN ('reserved', 'confirmed')),
+    founder_status TEXT NOT NULL CHECK(founder_status IN ('PENDING_PAYMENT', 'CONFIRMED')),
+    reservation_expires_at TEXT, created_at TEXT NOT NULL, confirmed_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS neighborhood_lots (
+    neighborhood_id TEXT NOT NULL REFERENCES neighborhoods(id),
+    lot_index INTEGER NOT NULL, plot_id TEXT NOT NULL UNIQUE REFERENCES plots(id),
+    status TEXT NOT NULL CHECK(status IN ('confirmed')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(neighborhood_id, lot_index)
+  );
 `);
 try { database.exec("ALTER TABLE plots ADD COLUMN price_usd INTEGER NOT NULL DEFAULT 0"); } catch { /* existing database already migrated */ }
 for (const migration of [
@@ -97,6 +116,7 @@ export type StoredPlot = PurchaseDraft & {
 export class PlotUnavailableError extends Error {}
 export class ReservationExpiredError extends Error {}
 export class PlotOwnershipError extends Error {}
+export class NeighborhoodUnavailableError extends Error {}
 
 function rowToPlot(row: Record<string, unknown>): StoredPlot {
   return {
@@ -154,6 +174,89 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
   return { plot: getPlot(id)!, ownerToken };
 }
 
+export type StoredNeighborhood = {
+  id: string;
+  name: string;
+  founderPlotId: string;
+  status: "reserved" | "confirmed";
+  founderStatus: "PENDING_PAYMENT" | "CONFIRMED";
+  reservationExpiresAt: string | null;
+  confirmedAt: string | null;
+  boundary: NeighborhoodBoundary;
+  capacity: number;
+  occupancy: number;
+  price: ReturnType<typeof priceForNeighborhoodOccupancy>;
+};
+
+function rowToNeighborhood(row: Record<string, unknown>): StoredNeighborhood {
+  const boundary = { originX: Number(row.origin_x), originY: Number(row.origin_y), width: Number(row.width), height: Number(row.height), columns: Number(row.columns_count), rows: Number(row.rows_count) };
+  const capacity = Number(row.capacity);
+  const occupancy = Number(row.occupancy ?? 0);
+  return {
+    id: String(row.id), name: String(row.name), founderPlotId: String(row.founder_plot_id),
+    status: String(row.status) as StoredNeighborhood["status"], founderStatus: String(row.founder_status) as StoredNeighborhood["founderStatus"],
+    reservationExpiresAt: row.reservation_expires_at ? String(row.reservation_expires_at) : null,
+    confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
+    boundary, capacity, occupancy,
+    price: priceForNeighborhoodOccupancy(occupancy, { ...defaultNeighborhoodConfiguration, capacity, columns: boundary.columns, lotWidth: Number(row.lot_width), lotHeight: Number(row.lot_height), founderPrice: Number(row.founder_price_usd) }),
+  };
+}
+
+function removeExpiredNeighborhoodReservations(timestamp: string) {
+  const expired = database.prepare("SELECT id, founder_plot_id FROM neighborhoods WHERE status = 'reserved' AND reservation_expires_at <= ?").all(timestamp) as Array<Record<string, unknown>>;
+  for (const neighborhood of expired) {
+    database.prepare("DELETE FROM neighborhood_lots WHERE neighborhood_id = ?").run(String(neighborhood.id));
+    database.prepare("DELETE FROM neighborhoods WHERE id = ?").run(String(neighborhood.id));
+    database.prepare("DELETE FROM plots WHERE id = ? AND status = 'reserved'").run(String(neighborhood.founder_plot_id));
+  }
+}
+
+/** Reserves a unique neighborhood/name/founder plot, but grants no founder privilege until checkout confirms. */
+export function reserveNeighborhoodFounder(input: Record<string, unknown>, now = new Date()) {
+  const lat = Number(input.lat);
+  const lon = Number(input.lon);
+  const { displayName, key } = normalizeNeighborhoodName(input.neighborhoodName);
+  const founder = rectangleFor(lat, lon, defaultNeighborhoodConfiguration.lotWidth, defaultNeighborhoodConfiguration.lotHeight);
+  const boundary = boundaryForFounder(founder);
+  const id = `nh_${randomUUID()}`;
+  const plotId = `rsv_${randomUUID()}`;
+  const ownerToken = randomUUID();
+  const createdAt = now.toISOString();
+  const reservationExpiresAt = new Date(now.getTime() + 15 * 60_000).toISOString();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.prepare("DELETE FROM plots WHERE status = 'reserved' AND reservation_expires_at <= ?").run(createdAt);
+    removeExpiredNeighborhoodReservations(createdAt);
+    const plotConflict = (database.prepare("SELECT x, y, width, height FROM plots WHERE status IN ('reserved', 'paid')").all() as Array<Record<string, unknown>>)
+      .some((plot) => rectanglesOverlap(founder, { x: Number(plot.x), y: Number(plot.y), width: Number(plot.width), height: Number(plot.height) }));
+    if (plotConflict) throw new NeighborhoodUnavailableError("The founder plot is no longer available.");
+    const neighborhoodConflict = (database.prepare("SELECT origin_x, origin_y, width, height FROM neighborhoods WHERE status IN ('reserved', 'confirmed')").all() as Array<Record<string, unknown>>)
+      .some((neighborhood) => rectanglesOverlap({ x: boundary.originX, y: boundary.originY, width: boundary.width, height: boundary.height }, { x: Number(neighborhood.origin_x), y: Number(neighborhood.origin_y), width: Number(neighborhood.width), height: Number(neighborhood.height) }));
+    if (neighborhoodConflict) throw new NeighborhoodUnavailableError("A neighborhood already exists at this location.");
+    database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,owner_token,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(plotId, founder.x, founder.y, founder.width, founder.height, lat, lon, "Founder plot", "", "", null, 1, 0, 0, defaultNeighborhoodConfiguration.founderPrice, "reserved", reservationExpiresAt, ownerToken, createdAt);
+    database.prepare(`INSERT INTO neighborhoods (id,name,name_key,origin_x,origin_y,width,height,columns_count,rows_count,capacity,lot_width,lot_height,founder_price_usd,founder_plot_id,status,founder_status,reservation_expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, displayName, key, boundary.originX, boundary.originY, boundary.width, boundary.height, boundary.columns, boundary.rows, defaultNeighborhoodConfiguration.capacity, defaultNeighborhoodConfiguration.lotWidth, defaultNeighborhoodConfiguration.lotHeight, defaultNeighborhoodConfiguration.founderPrice, plotId, "reserved", "PENDING_PAYMENT", reservationExpiresAt, createdAt);
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) throw new NeighborhoodUnavailableError("That neighborhood name is already reserved."); throw error; }
+  return { neighborhood: getNeighborhood(id)!, founderPlot: getPlot(plotId)!, ownerToken };
+}
+
+function confirmFounderNeighborhoodForPlot(plotId: string, timestamp: string) {
+  const neighborhood = database.prepare("SELECT id, status, reservation_expires_at FROM neighborhoods WHERE founder_plot_id = ?").get(plotId) as Record<string, unknown> | undefined;
+  if (!neighborhood) return;
+  if (neighborhood.status !== "reserved" || String(neighborhood.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("The neighborhood reservation expired before payment completed.");
+  const neighborhoodId = String(neighborhood.id);
+  database.prepare("UPDATE neighborhoods SET status = 'confirmed', founder_status = 'CONFIRMED', reservation_expires_at = NULL, confirmed_at = ? WHERE id = ?").run(timestamp, neighborhoodId);
+  database.prepare("INSERT INTO neighborhood_lots (neighborhood_id, lot_index, plot_id, status, created_at) VALUES (?, 0, ?, 'confirmed', ?)").run(neighborhoodId, plotId, timestamp);
+}
+
+export function getNeighborhood(id: string) {
+  const row = database.prepare(`SELECT neighborhoods.*, (SELECT COUNT(*) FROM neighborhood_lots WHERE neighborhood_id = neighborhoods.id AND status = 'confirmed') AS occupancy
+    FROM neighborhoods WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+  return row ? rowToNeighborhood(row) : null;
+}
+
 export function requirePlotOwner(id: string, suppliedToken: string | undefined) {
   const row = database.prepare("SELECT owner_token FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   const token = row?.owner_token;
@@ -170,6 +273,7 @@ export function confirmSandboxCheckout(id: string, now = new Date()) {
     const row = database.prepare("SELECT * FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!row || row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("Your reservation has expired. Please select the plot again.");
     database.prepare("UPDATE plots SET status = 'paid', paid_at = ?, reservation_expires_at = NULL WHERE id = ?").run(timestamp, id);
+    confirmFounderNeighborhoodForPlot(id, timestamp);
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -202,6 +306,7 @@ export function fulfillStripeCheckout(id: string, sessionId: string, paymentInte
     if (row.status === "paid") { database.exec("COMMIT"); return getPlot(id)!; }
     if (row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("The reservation expired before payment completed.");
     database.prepare("UPDATE plots SET status = 'paid', paid_at = ?, reservation_expires_at = NULL, stripe_payment_intent_id = ? WHERE id = ?").run(timestamp, paymentIntentId, id);
+    confirmFounderNeighborhoodForPlot(id, timestamp);
     database.exec("COMMIT");
   } catch (error) { database.exec("ROLLBACK"); throw error; }
   return getPlot(id)!;
