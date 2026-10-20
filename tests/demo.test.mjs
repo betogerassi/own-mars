@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { priceOf, pointToLatLon, validPlot } from '../.test-build/demo.js';
 import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, zoneAt } from '../.test-build/marketplace.js';
 import { MARS_MAX_DISTANCE, MARS_MIN_DISTANCE, nextMarsCameraDistance } from '../.test-build/camera.js';
+import { boundaryForFounder, defaultNeighborhoodConfiguration, founderStatusAfterPayment, lotForIndex, normalizeNeighborhoodName, priceForNeighborhoodOccupancy } from '../.test-build/neighborhoods.js';
 
 test('calculates valid plot prices', () => {
   assert.equal(priceOf({ width: 20, height: 20 }), 400);
@@ -43,4 +44,21 @@ test('keeps camera zoom reversible for 20 in/out cycles and clamps its limits', 
   assert.equal(distance, 5.25);
   assert.equal(nextMarsCameraDistance(1.9, 0.8), MARS_MIN_DISTANCE);
   assert.equal(nextMarsCameraDistance(5.9, 1.25), MARS_MAX_DISTANCE);
+});
+test('creates stable configurable neighborhood lots and enforces founder confirmation', () => {
+  const boundary = boundaryForFounder({ x: 20000, y: 12500, width: 10, height: 10 });
+  assert.deepEqual({ ...boundary, originX: boundary.originX }, { originX: 19950, originY: 12450, width: 100, height: 100, columns: 10, rows: 10 });
+  assert.deepEqual(lotForIndex(boundary, 0), { x: 19950, y: 12450, width: 10, height: 10 });
+  assert.deepEqual(lotForIndex(boundary, 99), { x: 20040, y: 12540, width: 10, height: 10 });
+  assert.equal(founderStatusAfterPayment(false), 'PENDING_PAYMENT');
+  assert.equal(founderStatusAfterPayment(true), 'CONFIRMED');
+  assert.deepEqual(normalizeNeighborhoodName('  Olympus  Heights  '), { displayName: 'Olympus Heights', key: 'olympus heights' });
+  assert.equal(defaultNeighborhoodConfiguration.capacity, 100);
+});
+test('prices neighborhood lots only from confirmed occupancy', () => {
+  assert.equal(priceForNeighborhoodOccupancy(0).price, 50);
+  assert.equal(priceForNeighborhoodOccupancy(19).plotsUntilNextThreshold, 1);
+  assert.equal(priceForNeighborhoodOccupancy(20).price, 65);
+  assert.equal(priceForNeighborhoodOccupancy(60).price, 110);
+  assert.deepEqual(priceForNeighborhoodOccupancy(100), { price: null, soldOut: true, confirmedOccupancy: 100, capacity: 100, remaining: 0, nextThreshold: null, plotsUntilNextThreshold: null });
 });
