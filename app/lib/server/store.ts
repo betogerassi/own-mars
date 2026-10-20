@@ -120,7 +120,7 @@ function normalizeDraft(input: Record<string, unknown>): PurchaseDraft {
   const height = Number(input.height);
   const rectangle = rectangleFor(lat, lon, width, height);
   const image = sanitizeText(input.image, 512);
-  if (image && !image.startsWith("/uploads/")) throw new Error("Artwork must be a validated local upload.");
+  if (image && !/^\/api\/artwork\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(image)) throw new Error("Artwork must be a validated OWN MARS upload.");
   const crop = Math.min(2.5, Math.max(1, Number(input.crop) || 1));
   const cropX = Math.min(1, Math.max(-1, Number(input.cropX) || 0));
   const cropY = Math.min(1, Math.max(-1, Number(input.cropY) || 0));
@@ -206,6 +206,12 @@ export function fulfillStripeCheckout(id: string, sessionId: string, paymentInte
 export function getPlot(id: string) {
   const row = database.prepare("SELECT plots.*, (SELECT COUNT(*) FROM plot_likes WHERE plot_id = plots.id) AS likes FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   return row ? rowToPlot(row) : null;
+}
+
+/** Public artwork is available only while its plot remains published. */
+export function isPublicArtworkPath(imagePath: string) {
+  const row = database.prepare("SELECT 1 FROM plots WHERE image = ? AND status = 'paid' AND publication_state = 'PUBLISHED' LIMIT 1").get(imagePath);
+  return Boolean(row);
 }
 
 export function publishedPlots() {
