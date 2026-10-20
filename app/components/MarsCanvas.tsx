@@ -7,6 +7,7 @@ import * as THREE from "three";
 import type { MutableRefObject } from "react";
 import type { Spot } from "../lib/demo";
 import { pointToLatLon } from "../lib/demo";
+import { MARS_MAX_DISTANCE, MARS_MIN_DISTANCE, nextMarsCameraDistance } from "../lib/camera";
 
 export type MarsControls = {
   zoomIn: () => void;
@@ -20,8 +21,8 @@ type Transition = { position: THREE.Vector3; target: THREE.Vector3 };
 
 const RADIUS = 1.5;
 const INITIAL_POSITION = new THREE.Vector3(0, 0, 5.25);
-const MIN_DISTANCE = 1.85;
-const MAX_DISTANCE = 6;
+const MIN_DISTANCE = MARS_MIN_DISTANCE;
+const MAX_DISTANCE = MARS_MAX_DISTANCE;
 
 function positionFor(lat: number, lon: number, radius = RADIUS) {
   const latRadians = THREE.MathUtils.degToRad(lat);
@@ -103,7 +104,7 @@ function Scene({
     cancelTransition();
     const target = controls.current?.target ?? new THREE.Vector3();
     const offset = camera.position.clone().sub(target);
-    const nextDistance = THREE.MathUtils.clamp(offset.length() * factor, MIN_DISTANCE, MAX_DISTANCE);
+    const nextDistance = nextMarsCameraDistance(offset.length(), factor);
     if (offset.lengthSq() === 0) offset.set(0, 0, 1);
     camera.position.copy(target.clone().add(offset.normalize().multiplyScalar(nextDistance)));
     controls.current?.update();
