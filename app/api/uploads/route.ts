@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { cookies } from "next/headers";
+import { artworkCookie, artworkCookieOptions, artworkDirectory, artworkPath, newArtworkFilename } from "../../lib/server/artwork";
 
 export const runtime = "nodejs";
 
@@ -18,9 +18,10 @@ export async function POST(request: Request) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const format = signatures.find(({ matches }) => matches(bytes));
   if (!format) return Response.json({ error: "Only valid JPG, PNG, or WebP files are accepted." }, { status: 400 });
-  const directory = join(process.cwd(), "public", "uploads");
-  await mkdir(directory, { recursive: true });
-  const filename = `${randomUUID()}.${format.extension}`;
-  await writeFile(join(directory, filename), bytes, { flag: "wx" });
-  return Response.json({ url: `/uploads/${filename}`, mime: format.mime }, { status: 201 });
+  await mkdir(artworkDirectory, { recursive: true });
+  const filename = newArtworkFilename(format.extension as "jpg" | "png" | "webp");
+  await writeFile(artworkPath(filename), bytes, { flag: "wx" });
+  const token = newArtworkFilename("webp");
+  (await cookies()).set(artworkCookie(filename), token, artworkCookieOptions);
+  return Response.json({ url: `/api/artwork/${filename}`, mime: format.mime }, { status: 201 });
 }
