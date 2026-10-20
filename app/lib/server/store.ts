@@ -40,6 +40,8 @@ database.exec(`
     published_at TEXT,
     status TEXT NOT NULL CHECK(status IN ('reserved', 'paid')),
     reservation_expires_at TEXT,
+    stripe_checkout_session_id TEXT UNIQUE,
+    stripe_payment_intent_id TEXT,
     created_at TEXT NOT NULL, paid_at TEXT
   );
   CREATE INDEX IF NOT EXISTS plots_rectangle ON plots(status, x, y, width, height);
@@ -65,10 +67,13 @@ for (const migration of [
   "ALTER TABLE plots ADD COLUMN creator_name TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE plots ADD COLUMN description TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE plots ADD COLUMN published_at TEXT",
+  "ALTER TABLE plots ADD COLUMN stripe_checkout_session_id TEXT",
+  "ALTER TABLE plots ADD COLUMN stripe_payment_intent_id TEXT",
   "ALTER TABLE plots ADD COLUMN crop REAL NOT NULL DEFAULT 1",
   "ALTER TABLE plots ADD COLUMN crop_x REAL NOT NULL DEFAULT 0",
   "ALTER TABLE plots ADD COLUMN crop_y REAL NOT NULL DEFAULT 0",
 ]) { try { database.exec(migration); } catch { /* existing database already migrated */ } }
+database.exec("CREATE UNIQUE INDEX IF NOT EXISTS plots_stripe_checkout_session_id ON plots(stripe_checkout_session_id) WHERE stripe_checkout_session_id IS NOT NULL");
 }
 
 export type StoredPlot = PurchaseDraft & {
@@ -151,6 +156,35 @@ export function confirmSandboxCheckout(id: string, now = new Date()) {
     database.exec("ROLLBACK");
     throw error;
   }
+  return getPlot(id)!;
+}
+
+/** Associates one Stripe test Checkout Session with a still-active reservation. */
+export function recordStripeCheckoutSession(id: string, sessionId: string, now = new Date()) {
+  const timestamp = now.toISOString();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database.prepare("SELECT status, reservation_expires_at, stripe_checkout_session_id FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row || row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("Your reservation has expired. Please select the plot again.");
+    if (row.stripe_checkout_session_id && row.stripe_checkout_session_id !== sessionId) throw new Error("A checkout session already exists for this plot.");
+    database.prepare("UPDATE plots SET stripe_checkout_session_id = ? WHERE id = ?").run(sessionId, id);
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); throw error; }
+  return getPlot(id)!;
+}
+
+/** Webhook fulfillment is safe to repeat for the same verified Checkout Session. */
+export function fulfillStripeCheckout(id: string, sessionId: string, paymentIntentId: string | null, now = new Date()) {
+  const timestamp = now.toISOString();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database.prepare("SELECT status, reservation_expires_at, stripe_checkout_session_id FROM plots WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row || row.stripe_checkout_session_id !== sessionId) throw new Error("Checkout session does not match this plot.");
+    if (row.status === "paid") { database.exec("COMMIT"); return getPlot(id)!; }
+    if (row.status !== "reserved" || String(row.reservation_expires_at) <= timestamp) throw new ReservationExpiredError("The reservation expired before payment completed.");
+    database.prepare("UPDATE plots SET status = 'paid', paid_at = ?, reservation_expires_at = NULL, stripe_payment_intent_id = ? WHERE id = ?").run(timestamp, paymentIntentId, id);
+    database.exec("COMMIT");
+  } catch (error) { database.exec("ROLLBACK"); throw error; }
   return getPlot(id)!;
 }
 
