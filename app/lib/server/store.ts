@@ -64,7 +64,7 @@ database.exec(`
   );
   CREATE TABLE IF NOT EXISTS neighborhoods (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, founder_name TEXT NOT NULL DEFAULT '',
     origin_x INTEGER NOT NULL, origin_y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
     columns_count INTEGER NOT NULL, rows_count INTEGER NOT NULL, capacity INTEGER NOT NULL,
     lot_width INTEGER NOT NULL, lot_height INTEGER NOT NULL, founder_price_usd INTEGER NOT NULL,
@@ -95,6 +95,7 @@ for (const migration of [
   "ALTER TABLE plots ADD COLUMN crop_x REAL NOT NULL DEFAULT 0",
   "ALTER TABLE plots ADD COLUMN crop_y REAL NOT NULL DEFAULT 0",
   "ALTER TABLE content_reports ADD COLUMN reporter_id TEXT",
+  "ALTER TABLE neighborhoods ADD COLUMN founder_name TEXT NOT NULL DEFAULT ''",
 ]) { try { database.exec(migration); } catch { /* existing database already migrated */ } }
 database.exec("CREATE UNIQUE INDEX IF NOT EXISTS plots_stripe_checkout_session_id ON plots(stripe_checkout_session_id) WHERE stripe_checkout_session_id IS NOT NULL");
 database.exec("CREATE UNIQUE INDEX IF NOT EXISTS reports_per_visitor ON content_reports(plot_id, reporter_id) WHERE reporter_id IS NOT NULL");
@@ -178,6 +179,7 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
 export type StoredNeighborhood = {
   id: string;
   name: string;
+  founderName: string;
   founderPlotId: string;
   status: "reserved" | "confirmed";
   founderStatus: "PENDING_PAYMENT" | "CONFIRMED";
@@ -194,7 +196,7 @@ function rowToNeighborhood(row: Record<string, unknown>): StoredNeighborhood {
   const capacity = Number(row.capacity);
   const occupancy = Number(row.occupancy ?? 0);
   return {
-    id: String(row.id), name: String(row.name), founderPlotId: String(row.founder_plot_id),
+    id: String(row.id), name: String(row.name), founderName: String(row.founder_name ?? ""), founderPlotId: String(row.founder_plot_id),
     status: String(row.status) as StoredNeighborhood["status"], founderStatus: String(row.founder_status) as StoredNeighborhood["founderStatus"],
     reservationExpiresAt: row.reservation_expires_at ? String(row.reservation_expires_at) : null,
     confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
@@ -217,6 +219,8 @@ export function reserveNeighborhoodFounder(input: Record<string, unknown>, now =
   const lat = Number(input.lat);
   const lon = Number(input.lon);
   const { displayName, key } = normalizeNeighborhoodName(input.neighborhoodName);
+  const founderName = sanitizeText(input.founderName, 80);
+  if (!founderName) throw new Error("A public founder name is required.");
   const founder = rectangleFor(lat, lon, defaultNeighborhoodConfiguration.lotWidth, defaultNeighborhoodConfiguration.lotHeight);
   const boundary = boundaryForFounder(founder);
   const id = `nh_${randomUUID()}`;
@@ -236,8 +240,8 @@ export function reserveNeighborhoodFounder(input: Record<string, unknown>, now =
     if (neighborhoodConflict) throw new NeighborhoodUnavailableError("A neighborhood already exists at this location.");
     database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,owner_token,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(plotId, founder.x, founder.y, founder.width, founder.height, lat, lon, "Founder plot", "", "", null, 1, 0, 0, defaultNeighborhoodConfiguration.founderPrice, "reserved", reservationExpiresAt, ownerToken, createdAt);
-    database.prepare(`INSERT INTO neighborhoods (id,name,name_key,origin_x,origin_y,width,height,columns_count,rows_count,capacity,lot_width,lot_height,founder_price_usd,founder_plot_id,status,founder_status,reservation_expires_at,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, displayName, key, boundary.originX, boundary.originY, boundary.width, boundary.height, boundary.columns, boundary.rows, defaultNeighborhoodConfiguration.capacity, defaultNeighborhoodConfiguration.lotWidth, defaultNeighborhoodConfiguration.lotHeight, defaultNeighborhoodConfiguration.founderPrice, plotId, "reserved", "PENDING_PAYMENT", reservationExpiresAt, createdAt);
+    database.prepare(`INSERT INTO neighborhoods (id,name,name_key,founder_name,origin_x,origin_y,width,height,columns_count,rows_count,capacity,lot_width,lot_height,founder_price_usd,founder_plot_id,status,founder_status,reservation_expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, displayName, key, founderName, boundary.originX, boundary.originY, boundary.width, boundary.height, boundary.columns, boundary.rows, defaultNeighborhoodConfiguration.capacity, defaultNeighborhoodConfiguration.lotWidth, defaultNeighborhoodConfiguration.lotHeight, defaultNeighborhoodConfiguration.founderPrice, plotId, "reserved", "PENDING_PAYMENT", reservationExpiresAt, createdAt);
     database.exec("COMMIT");
   } catch (error) { database.exec("ROLLBACK"); if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) throw new NeighborhoodUnavailableError("That neighborhood name is already reserved."); throw error; }
   return { neighborhood: getNeighborhood(id)!, founderPlot: getPlot(plotId)!, ownerToken };
