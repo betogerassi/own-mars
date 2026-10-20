@@ -20,6 +20,14 @@ test('addresses exactly one billion cells and produces stable plot rectangles', 
   assert.deepEqual(rectangle, { x: 19990, y: 12490, width: 20, height: 20 });
   assert.equal(rectanglesOverlap(rectangle, { ...rectangle, x: rectangle.x + 20 }), false);
 });
+test('wraps plot selection and conflicts safely across the antimeridian', () => {
+  const east = rectangleFor(0, 180, 20, 20);
+  const west = rectangleFor(0, -180, 20, 20);
+  assert.deepEqual(east, { x: 39990, y: 12490, width: 20, height: 20 });
+  assert.deepEqual(west, east);
+  assert.equal(rectanglesOverlap(east, { x: 0, y: 12490, width: 10, height: 20 }), true);
+  assert.equal(rectanglesOverlap(east, { x: 10, y: 12490, width: 10, height: 20 }), false);
+});
 test('assigns landmark pricing and reports exact multi-zone totals', () => {
   assert.equal(zoneAt(18, -135), 'MARS_LANDMARKS');
   const price = priceForRectangle(rectangleFor(18, -135, 10, 10));

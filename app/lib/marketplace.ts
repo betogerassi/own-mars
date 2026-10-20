@@ -37,20 +37,31 @@ export function rectangleFor(lat: number, lon: number, width: number, height: nu
     throw new Error("Invalid plot coordinates or size.");
   }
 
-  const centerX = Math.floor(((lon + 180) / 360) * CANVAS_WIDTH);
+  // Longitude has no hard edge: +180° and -180° are the same meridian.
+  // Store the left edge modulo the grid width so a small rectangle may span it.
+  const centerX = Math.floor(((lon + 180) / 360) * CANVAS_WIDTH) % CANVAS_WIDTH;
   const centerY = Math.floor(((90 - lat) / 180) * CANVAS_HEIGHT);
   return {
-    x: Math.max(0, Math.min(CANVAS_WIDTH - width, centerX - Math.floor(width / 2))),
+    x: (centerX - Math.floor(width / 2) + CANVAS_WIDTH) % CANVAS_WIDTH,
     y: Math.max(0, Math.min(CANVAS_HEIGHT - height, centerY - Math.floor(height / 2))),
     width,
     height,
   };
 }
 
-/** Rectangles touching at their edges are separate plots. */
+/** Splits a horizontally-wrapped rectangle into its in-grid spans. */
+export function horizontalSegments(rectangle: PlotRectangle) {
+  const left = ((rectangle.x % CANVAS_WIDTH) + CANVAS_WIDTH) % CANVAS_WIDTH;
+  const right = left + rectangle.width;
+  return right <= CANVAS_WIDTH
+    ? [{ start: left, end: right }]
+    : [{ start: left, end: CANVAS_WIDTH }, { start: 0, end: right - CANVAS_WIDTH }];
+}
+
+/** Rectangles touching at their edges are separate plots, including at the antimeridian. */
 export function rectanglesOverlap(a: PlotRectangle, b: PlotRectangle) {
-  return a.x < b.x + b.width && a.x + a.width > b.x
-    && a.y < b.y + b.height && a.y + a.height > b.y;
+  if (a.y >= b.y + b.height || a.y + a.height <= b.y) return false;
+  return horizontalSegments(a).some((aSpan) => horizontalSegments(b).some((bSpan) => aSpan.start < bSpan.end && aSpan.end > bSpan.start));
 }
 
 /** Geographic commercial zones. Later versions can replace these published bounds with curated GIS polygons. */

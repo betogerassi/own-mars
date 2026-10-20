@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, safeWebsite, sanitizeText, type PurchaseDraft } from "../marketplace";
+import { CANVAS_HEIGHT, CANVAS_WIDTH, priceForRectangle, rectangleFor, rectanglesOverlap, safeWebsite, sanitizeText, type PurchaseDraft } from "../marketplace";
 
 const dataDirectory = join(process.cwd(), "data");
 let openedDatabase: DatabaseSync | undefined;
@@ -137,8 +137,12 @@ export function reservePlot(input: Record<string, unknown>, now = new Date()) {
   database.exec("BEGIN IMMEDIATE");
   try {
     database.prepare("DELETE FROM plots WHERE status = 'reserved' AND reservation_expires_at <= ?").run(createdAt);
-    const conflict = database.prepare(`SELECT id FROM plots WHERE status IN ('reserved', 'paid')
-      AND NOT (x + width <= ? OR x >= ? OR y + height <= ? OR y >= ?) LIMIT 1`).get(draft.x, draft.x + draft.width, draft.y, draft.y + draft.height);
+    // This remains inside BEGIN IMMEDIATE. SQL's ordinary rectangle predicate cannot
+    // see a shape crossing column 0, so compare the small active inventory in JS.
+    const conflict = (database.prepare("SELECT id, x, y, width, height FROM plots WHERE status IN ('reserved', 'paid')").all() as Array<Record<string, unknown>>)
+      .find((plot) => rectanglesOverlap(draft, {
+        x: Number(plot.x), y: Number(plot.y), width: Number(plot.width), height: Number(plot.height),
+      }));
     if (conflict) throw new PlotUnavailableError("That plot is no longer available.");
     database.prepare(`INSERT INTO plots (id,x,y,width,height,lat,lon,name,message,website,image,crop,crop_x,crop_y,price_usd,status,reservation_expires_at,owner_token,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, draft.x, draft.y, draft.width, draft.height, draft.lat, draft.lon, draft.name, draft.message, draft.url, draft.image ?? null, draft.crop, draft.cropX, draft.cropY, price, "reserved", reservationExpiresAt, ownerToken, createdAt);
